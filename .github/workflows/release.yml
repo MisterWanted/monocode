@@ -104,7 +104,7 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
-          BUNDLE="src-tauri/target/release/bundle"
+          BUNDLE="target/release/bundle"
           TAR=$(ls "$BUNDLE"/macos/*.app.tar.gz | head -n 1)
           SIG="${TAR}.sig"
           DMG=$(ls "$BUNDLE"/dmg/*.dmg | head -n 1)
@@ -144,7 +144,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          BUNDLE="src-tauri/target/release/bundle"
+          BUNDLE="target/release/bundle"
           TAR=$(ls "$BUNDLE"/macos/*.app.tar.gz | head -n 1)
           SIG="${TAR}.sig"
           DMG=$(ls "$BUNDLE"/dmg/*.dmg | head -n 1)
