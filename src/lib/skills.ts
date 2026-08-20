@@ -1,0 +1,311 @@
+import {
+  createPath,
+  homeDir,
+  listSkills,
+  readTextFile,
+  writeTextFile,
+  type DiscoveredSkill,
+} from "./fs";
+import { invalidateProjectFiles } from "./fileIndex";
+import { fuzzyMatch } from "./fuzzy";
+import { joinPath } from "./paths";
+import { looksLikeProject } from "./recents";
+import {
+  CREATE_SKILL_BODY,
+  CREATE_SKILL_DESCRIPTION,
+  CREATE_SKILL_NAME,
+} from "./createSkill";
+
+export type SkillScope = "project" | "user" | "builtin";
+export type SkillSource =
+  | "agents"
+  | "claude"
+  | "cursor"
+  | "codex"
+  | "opencode"
+  | "monocode";
+
+export type Skill = {
+  name: string;
+  description: string;
+  path: string;
+  scope: SkillScope;
+  source: SkillSource;
+};
+
+export type SlashToken = {
+  start: number;
+  end: number;
+  query: string;
+};
+
+export const BUILTIN_CREATE_SKILL: Skill = {
+  name: CREATE_SKILL_NAME,
+  description: CREATE_SKILL_DESCRIPTION,
+  path: "",
+  scope: "builtin",
+  source: "monocode",
+};
+
+const SKILL_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const SKILL_TOKEN_RE = /(^|\s)\/([a-z0-9]+(?:-[a-z0-9]+)*)(?=\s|$)/g;
+const MAX_PICKER = 50;
+
+let cache: { cwd: string; skills: Skill[] } | null = null;
+let inflight: { cwd: string; promise: Promise<Skill[]> } | null = null;
+
+export function peekSkills(cwd: string): Skill[] | null {
+  return cache?.cwd === cwd ? cache.skills : null;
+}
+
+export function invalidateSkills(cwd?: string) {
+  if (!cwd || cache?.cwd === cwd) cache = null;
+}
+
+export async function loadSkills(
+  cwd: string,
+  refresh = false,
+): Promise<Skill[]> {
+  if (!refresh && cache?.cwd === cwd) return cache.skills;
+  if (!refresh && inflight?.cwd === cwd) return inflight.promise;
+
+  const promise = listSkills(cwd)
+    .then((discovered) => mergeCatalog(discovered))
+    .catch(() => mergeCatalog([]))
+    .then((skills) => {
+      cache = { cwd, skills };
+      return skills;
+    })
+    .finally(() => {
+      if (inflight?.promise === promise) inflight = null;
+    });
+  inflight = { cwd, promise };
+  return promise;
+}
+
+export function mergeCatalog(discovered: DiscoveredSkill[]): Skill[] {
+  const out = new Map<string, Skill>();
+  const add = (skill: Skill) => {
+    if (!skill.name || out.has(skill.name)) return;
+    out.set(skill.name, skill);
+  };
+  for (const skill of discovered) {
+    if (skill.source === "agents") add(asSkill(skill));
+  }
+  add(BUILTIN_CREATE_SKILL);
+  for (const skill of discovered) {
+    if (skill.source !== "agents") add(asSkill(skill));
+  }
+  return [...out.values()];
+}
+
+function asSkill(skill: DiscoveredSkill): Skill {
+  return {
+    name: skill.name,
+    description: skill.description,
+    path: skill.path,
+    scope: skill.scope === "user" ? "user" : "project",
+    source: skill.source === "monocode" ? "monocode" : skill.source,
+  };
+}
+
+export function rankSkills(skills: Skill[], query: string, limit = MAX_PICKER): Skill[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) {
+    return [...skills]
+      .sort((a, b) => {
+        const rank = scopeRank(a) - scopeRank(b);
+        if (rank !== 0) return rank;
+        return a.name.localeCompare(b.name);
+      })
+      .slice(0, limit);
+  }
+
+  const scored: { skill: Skill; score: number }[] = [];
+  for (const skill of skills) {
+    const nameHit = fuzzyMatch(needle, skill.name);
+    const descHit = nameHit ? null : fuzzyMatch(needle, skill.description);
+    const hit = nameHit ?? descHit;
+    if (!hit) continue;
+    const score = nameHit ? hit.score + 400 : hit.score;
+    scored.push({ skill, score });
+  }
+  scored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return a.skill.name.localeCompare(b.skill.name);
+  });
+  return scored.slice(0, limit).map((row) => row.skill);
+}
+
+function scopeRank(skill: Skill): number {
+  if (skill.scope === "builtin") return 0;
+  if (skill.scope === "project") return 1;
+  return 2;
+}
+
+/** Slash token that contains `cursor`, if the user is typing `/skill`. */
+export function slashTokenAt(text: string, cursor: number): SlashToken | null {
+  const i = clamp(cursor, 0, text.length);
+  let start = i;
+  while (start > 0 && !isSpace(text[start - 1]!)) start -= 1;
+  if (text[start] !== "/") return null;
+  if (start > 0 && text[start - 1] === ":") return null;
+
+  let end = start + 1;
+  while (end < text.length && !isSpace(text[end]!)) end += 1;
+
+  const typed = text.slice(start + 1, i);
+  if (typed.includes("/") || typed.includes("\\")) return null;
+  if (/[A-Z]/.test(typed)) return null;
+  if (!/^[a-z0-9-]*$/.test(typed)) return null;
+
+  return { start, end, query: typed };
+}
+
+export function replaceSlashToken(
+  text: string,
+  token: SlashToken,
+  name: string,
+): string {
+  const rest = text.slice(token.end);
+  const spacer = rest.startsWith(" ") ? "" : " ";
+  return `${text.slice(0, token.start)}/${name}${spacer}${rest}`;
+}
+
+export function skillNamesInText(text: string): string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  SKILL_TOKEN_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = SKILL_TOKEN_RE.exec(text))) {
+    const name = match[2];
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    names.push(name);
+  }
+  return names;
+}
+
+export function injectSkillPrompt(
+  text: string,
+  skills: Skill[],
+  bodies: Record<string, string>,
+): string {
+  const blocks: string[] = [];
+  const seen = new Set<string>();
+  for (const skill of skills) {
+    if (seen.has(skill.name)) continue;
+    seen.add(skill.name);
+    const body = bodies[skill.name]?.trim();
+    if (!body) continue;
+    blocks.push(`## /${skill.name}\n\n${body}`);
+  }
+  if (blocks.length === 0) return text;
+  return [
+    "The user invoked skill(s) with /name. Follow every instruction in each skill body.",
+    "",
+    blocks.join("\n\n"),
+    "",
+    "---",
+    "",
+    text,
+  ].join("\n");
+}
+
+export async function applySkillsToTurn(
+  text: string,
+  cwd: string,
+): Promise<string> {
+  const names = skillNamesInText(text);
+  if (names.length === 0) return text;
+  const catalog = await loadSkills(cwd);
+  const picked: Skill[] = [];
+  for (const name of names) {
+    const skill = catalog.find((item) => item.name === name);
+    if (skill) picked.push(skill);
+  }
+  if (picked.length === 0) return text;
+  const bodies: Record<string, string> = {};
+  await Promise.all(
+    picked.map(async (skill) => {
+      bodies[skill.name] = await readSkillBody(skill);
+    }),
+  );
+  return injectSkillPrompt(text, picked, bodies);
+}
+
+export async function readSkillBody(skill: Skill): Promise<string> {
+  if (!skill.path) return CREATE_SKILL_BODY;
+  try {
+    return await readTextFile(skill.path);
+  } catch {
+    return `Skill "${skill.name}" could not be read from ${skill.path}.`;
+  }
+}
+
+export function slugSkillName(raw: string): string {
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64)
+    .replace(/-+$/g, "");
+}
+
+export function isValidSkillName(name: string): boolean {
+  return SKILL_NAME_RE.test(name) && name.length <= 64;
+}
+
+export function titleFromSkillName(name: string): string {
+  return name
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+export function blankSkillMarkdown(name: string): string {
+  const title = titleFromSkillName(name);
+  const words = name.replace(/-/g, " ");
+  return `---
+name: ${name}
+description: ${title}. Use when the user asks to ${words}.
+---
+
+# ${title}
+
+## Instructions
+
+`;
+}
+
+export async function createBlankSkill(input: {
+  cwd: string;
+  name: string;
+  scope: "project" | "user";
+}): Promise<string> {
+  const name = slugSkillName(input.name);
+  if (!isValidSkillName(name)) {
+    throw new Error("Use a lowercase name with letters, numbers, and hyphens.");
+  }
+  const root =
+    input.scope === "user" || !looksLikeProject(input.cwd)
+      ? await homeDir()
+      : input.cwd;
+  const relative = `.agents/skills/${name}`;
+  await createPath(root, relative, true);
+  const path = joinPath(root, `${relative}/SKILL.md`);
+  await writeTextFile(path, blankSkillMarkdown(name));
+  invalidateSkills(input.cwd);
+  invalidateProjectFiles(input.cwd);
+  return path;
+}
+
+function isSpace(ch: string): boolean {
+  return ch === " " || ch === "\n" || ch === "\t" || ch === "\r";
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}

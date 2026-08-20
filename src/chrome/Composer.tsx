@@ -1,0 +1,666 @@
+import { ArrowUp, Plus, Square } from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ClipboardEvent,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import {
+  attachmentsFromFiles,
+  attachmentsFromPaths,
+  filesFromClipboard,
+  mergeAttachments,
+  pickAttachments,
+  revokeAttachment,
+} from "../lib/attachments";
+import type { RecentProject } from "../lib/recents";
+import type { Attachment, HarnessId, RuntimeMode } from "../lib/session";
+import {
+  createBlankSkill,
+  loadSkills,
+  mergeCatalog,
+  peekSkills,
+  rankSkills,
+  replaceSlashToken,
+  slashTokenAt,
+  type Skill,
+  type SlashToken,
+} from "../lib/skills";
+import { AccessPicker } from "./AccessPicker";
+import { AttachmentChip } from "./AttachmentChip";
+import { BranchPicker } from "./BranchPicker";
+import { CwdPicker } from "./CwdPicker";
+import { ModelPicker } from "./ModelPicker";
+import { ModelSettings } from "./ModelSettings";
+import { SkillPicker } from "./SkillPicker";
+import { projectName } from "../lib/paths";
+import { useTabGroupLogos } from "../lib/projectLogos";
+import { resolveTabGroupLogo } from "../lib/tabGroups";
+
+type Props = {
+  enabled?: boolean;
+  focused: boolean;
+  shell?: boolean;
+  harness: HarnessId;
+  model: string;
+  modelSettings?: Record<string, string>;
+  runtimeMode: RuntimeMode;
+  cwd?: string;
+  recents?: RecentProject[];
+  busy?: boolean;
+  onFocus: () => void;
+  onCwdChange: (cwd: string) => void;
+  onNewTerminal?: () => void;
+  onModelChange: (harness: HarnessId, model: string) => void;
+  onModelSettingsChange?: (settings: Record<string, string>) => void;
+  onRuntimeModeChange: (mode: RuntimeMode) => void;
+  onSubmit: (text: string, attachments: Attachment[]) => void;
+  onStop?: () => void;
+  onOpenFile?: (path: string) => void;
+  children?: ReactNode;
+};
+
+function ToolButton({
+  active,
+  disabled,
+  label,
+  onClick,
+  children,
+}: {
+  active?: boolean;
+  disabled?: boolean;
+  label: string;
+  onClick?: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      disabled={disabled}
+      onClick={onClick}
+      className={`grid size-6.5 shrink-0 place-items-center rounded-md ${
+        active
+          ? "bg-content/20 text-content"
+          : "bg-content/10 text-content/50 hover:bg-content/15 hover:text-content"
+      } disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-content/50`}
+    >
+      {children}
+    </button>
+  );
+}
+
+export function Composer({
+  enabled = true,
+  focused,
+  shell = false,
+  harness,
+  model,
+  modelSettings = {},
+  runtimeMode,
+  cwd = "~",
+  recents = [],
+  busy = false,
+  onFocus,
+  onCwdChange,
+  onNewTerminal,
+  onModelChange,
+  onModelSettingsChange,
+  onRuntimeModeChange,
+  onSubmit,
+  onStop,
+  onOpenFile,
+  children,
+}: Props) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const attachmentsRef = useRef<Attachment[]>([]);
+  const slashRef = useRef<SlashToken | null>(null);
+  const [hasValue, setHasValue] = useState(false);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [fileDrag, setFileDrag] = useState(false);
+  const [skills, setSkills] = useState<Skill[]>(
+    () => peekSkills(cwd) ?? mergeCatalog([]),
+  );
+  const [slash, setSlash] = useState<SlashToken | null>(null);
+  const [skillActive, setSkillActive] = useState(0);
+  const [creatingSkill, setCreatingSkill] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [createBusy, setCreateBusy] = useState(false);
+  const groupLogos = useTabGroupLogos();
+  const projectLogoPath = resolveTabGroupLogo(projectName(cwd), groupLogos);
+
+  slashRef.current = slash;
+
+  attachmentsRef.current = attachments;
+
+  const rankedSkills = rankSkills(skills, slash?.query ?? "");
+  const pickerOpen = creatingSkill || slash !== null;
+
+  const syncHasValue = useCallback((text: string, files: Attachment[]) => {
+    setHasValue(text.trim().length > 0 || files.length > 0);
+  }, []);
+
+  const addAttachments = useCallback(
+    (incoming: Attachment[]) => {
+      if (incoming.length === 0) return;
+      setAttachments((prev) => {
+        const next = mergeAttachments(prev, incoming);
+        syncHasValue(ref.current?.value ?? "", next);
+        return next;
+      });
+      ref.current?.focus();
+    },
+    [syncHasValue],
+  );
+
+  const removeAttachment = useCallback(
+    (id: string) => {
+      setAttachments((prev) => {
+        const removed = prev.find((file) => file.id === id);
+        if (removed) revokeAttachment(removed);
+        const next = prev.filter((file) => file.id !== id);
+        syncHasValue(ref.current?.value ?? "", next);
+        return next;
+      });
+      ref.current?.focus();
+    },
+    [syncHasValue],
+  );
+
+  useEffect(() => {
+    return () => {
+      for (const file of attachmentsRef.current) revokeAttachment(file);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadSkills(cwd, pickerOpen).then((next) => {
+      if (!cancelled) setSkills(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [cwd, pickerOpen]);
+
+  useEffect(() => {
+    setSkillActive(0);
+  }, [slash?.query, cwd]);
+
+  useEffect(() => {
+    setSkillActive((index) =>
+      rankedSkills.length === 0 ? 0 : Math.min(index, rankedSkills.length - 1),
+    );
+  }, [rankedSkills.length]);
+
+  const resizeTextarea = (el: HTMLTextAreaElement) => {
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  };
+
+  const syncSlashFromTextarea = (el: HTMLTextAreaElement) => {
+    if (creatingSkill) return;
+    setSlash(slashTokenAt(el.value, el.selectionStart ?? 0));
+  };
+
+  const pickSkill = useCallback(
+    (skill: Skill) => {
+      const el = ref.current;
+      const token = slashRef.current;
+      if (!el || !token) {
+        setSlash(null);
+        setCreatingSkill(false);
+        return;
+      }
+      const next = replaceSlashToken(el.value, token, skill.name);
+      el.value = next;
+      resizeTextarea(el);
+      let cursor = token.start + skill.name.length + 1;
+      if (next[cursor] === " ") cursor += 1;
+      el.setSelectionRange(cursor, cursor);
+      syncHasValue(next, attachmentsRef.current);
+      setSlash(null);
+      setCreatingSkill(false);
+      el.focus();
+    },
+    [syncHasValue],
+  );
+
+  useEffect(() => {
+    if (!focused) return;
+    if (
+      document.querySelector(
+        "[data-model-picker], [data-access-picker], [data-model-settings], [data-file-picker], [data-branch-picker], [data-skill-picker]",
+      )
+    )
+      return;
+    ref.current?.focus();
+  }, [focused]);
+
+  useEffect(() => {
+    if (!enabled) {
+      setFileDrag(false);
+      return;
+    }
+    const dropRoot = () =>
+      boxRef.current?.closest("[data-session-drop]") as HTMLElement | null;
+    let nativeDropAt = 0;
+
+    const toClientPoint = (x: number, y: number) => {
+      const scale = window.devicePixelRatio || 1;
+      // Tauri types this as PhysicalPosition, but macOS wry reports logical
+      // points. Only scale down when the point sits outside the CSS viewport.
+      if (scale !== 1 && (x > window.innerWidth || y > window.innerHeight)) {
+        return { x: x / scale, y: y / scale };
+      }
+      return { x, y };
+    };
+
+    const overTarget = (x: number, y: number) => {
+      const root = dropRoot();
+      if (!root) return false;
+      const point = toClientPoint(x, y);
+      const rect = root.getBoundingClientRect();
+      return (
+        point.x >= rect.left &&
+        point.x <= rect.right &&
+        point.y >= rect.top &&
+        point.y <= rect.bottom
+      );
+    };
+
+    const onDragOver = (event: DragEvent) => {
+      const data = event.dataTransfer;
+      if (!hasFiles(data)) return;
+      event.preventDefault();
+      data.dropEffect = "copy";
+      setFileDrag(true);
+    };
+    const onDragLeave = (event: DragEvent) => {
+      const root = dropRoot();
+      if (!root) return;
+      const next = event.relatedTarget as Node | null;
+      if (next && root.contains(next)) return;
+      setFileDrag(false);
+    };
+    const onDrop = (event: DragEvent) => {
+      const data = event.dataTransfer;
+      if (!hasFiles(data)) return;
+      event.preventDefault();
+      setFileDrag(false);
+      if (Date.now() - nativeDropAt < 250) return;
+      const files = [...data.files];
+      if (files.length === 0) return;
+      void attachmentsFromFiles(files).then(addAttachments);
+    };
+
+    const root = dropRoot();
+    root?.addEventListener("dragover", onDragOver);
+    root?.addEventListener("dragleave", onDragLeave);
+    root?.addEventListener("drop", onDrop);
+
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    void getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (event.payload.type === "leave") {
+          setFileDrag(false);
+          return;
+        }
+        const { x, y } = event.payload.position;
+        const over = overTarget(x, y);
+        if (event.payload.type === "enter" || event.payload.type === "over") {
+          setFileDrag(over);
+          return;
+        }
+        if (event.payload.type !== "drop") return;
+        setFileDrag(false);
+        if (!over) return;
+        nativeDropAt = Date.now();
+        void attachmentsFromPaths(event.payload.paths).then(addAttachments);
+      })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+      root?.removeEventListener("dragover", onDragOver);
+      root?.removeEventListener("dragleave", onDragLeave);
+      root?.removeEventListener("drop", onDrop);
+      unlisten?.();
+    };
+  }, [addAttachments, enabled]);
+
+  const submit = (value: string) => {
+    const text = value.trim();
+    const files = attachments;
+    if (!text && files.length === 0) return;
+    onSubmit(text, files);
+    if (!ref.current) return;
+    ref.current.value = "";
+    ref.current.style.height = "auto";
+    setAttachments([]);
+    setHasValue(false);
+    setSlash(null);
+    setCreatingSkill(false);
+    setCreateError(null);
+  };
+
+  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (creatingSkill) return;
+
+    if (slash) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        if (rankedSkills.length === 0) return;
+        setSkillActive((index) => (index + 1) % rankedSkills.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        if (rankedSkills.length === 0) return;
+        setSkillActive(
+          (index) => (index - 1 + rankedSkills.length) % rankedSkills.length,
+        );
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setSlash(null);
+        return;
+      }
+      if (e.key === "Tab") {
+        e.preventDefault();
+        const skill = rankedSkills[skillActive];
+        if (skill) pickSkill(skill);
+        return;
+      }
+      if (e.key === "Enter" && !e.shiftKey) {
+        const skill = rankedSkills[skillActive];
+        if (skill) {
+          e.preventDefault();
+          pickSkill(skill);
+          return;
+        }
+        if (!slash.query) {
+          e.preventDefault();
+          return;
+        }
+        setSlash(null);
+      }
+    }
+
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      submit(e.currentTarget.value);
+    }
+  };
+
+  const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = filesFromClipboard(e.clipboardData);
+    if (files.length === 0) return;
+    e.preventDefault();
+    void attachmentsFromFiles(files).then(addAttachments);
+  };
+
+  const attachFromPicker = () => {
+    void pickAttachments().then((files) => {
+      addAttachments(files);
+      ref.current?.focus();
+    });
+  };
+
+  return (
+    <div
+      className={`relative shrink-0 ${shell ? "" : "p-1.5 pt-0"}`}
+      onMouseDown={onFocus}
+    >
+      {children}
+      <div className="relative">
+        {pickerOpen ? (
+          <div className="absolute inset-x-0 bottom-full z-30 mb-1">
+            <SkillPicker
+              skills={rankedSkills}
+              query={slash?.query ?? ""}
+              active={skillActive}
+              creating={creatingSkill}
+              cwd={cwd}
+              error={createError}
+              busy={createBusy}
+              onActive={setSkillActive}
+              onPick={pickSkill}
+              onStartCreate={() => {
+                setCreatingSkill(true);
+                setCreateError(null);
+              }}
+              onCancelCreate={() => {
+                setCreatingSkill(false);
+                setCreateError(null);
+                const el = ref.current;
+                if (el) syncSlashFromTextarea(el);
+                el?.focus();
+              }}
+              onCreate={(name, scope) => {
+                setCreateBusy(true);
+                setCreateError(null);
+                void createBlankSkill({ cwd, name, scope })
+                  .then((path) => {
+                    const el = ref.current;
+                    const token = slashRef.current;
+                    if (el && token) {
+                      const rest = el.value.slice(token.end).replace(/^\s/, "");
+                      const next = `${el.value.slice(0, token.start)}${rest}`;
+                      el.value = next;
+                      resizeTextarea(el);
+                      el.setSelectionRange(token.start, token.start);
+                      syncHasValue(next, attachments);
+                    }
+                    setCreatingSkill(false);
+                    setSlash(null);
+                    setCreateError(null);
+                    void loadSkills(cwd, true).then(setSkills);
+                    onOpenFile?.(path);
+                    el?.focus();
+                  })
+                  .catch((err: unknown) => {
+                    setCreateError(
+                      err instanceof Error ? err.message : String(err),
+                    );
+                  })
+                  .finally(() => setCreateBusy(false));
+              }}
+            />
+          </div>
+        ) : null}
+        <div
+          ref={boxRef}
+          className={`relative z-10 rounded-lg border bg-content/3 ${
+            fileDrag
+              ? "border-accent/60"
+              : "border-content/10 has-focus:border-content/20"
+          }`}
+        >
+          {fileDrag ? (
+            <div className="pointer-events-none absolute inset-0 z-20 grid place-items-center rounded-lg bg-accent/8 text-[12px] text-content/70">
+              Drop files to attach
+            </div>
+          ) : null}
+          <div className="flex min-w-0 items-center gap-2.5 px-3 pt-2.5">
+            <CwdPicker
+              cwd={cwd}
+              recents={recents}
+              projectLogoPath={projectLogoPath}
+              enabled={enabled}
+              onCwdChange={onCwdChange}
+              onNewTerminal={onNewTerminal}
+              onClose={() => ref.current?.focus()}
+            />
+            <BranchPicker
+              cwd={cwd}
+              enabled={enabled}
+              onClose={() => ref.current?.focus()}
+            />
+          </div>
+
+          {attachments.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5 px-3 pt-2">
+              {attachments.map((file) => (
+                <AttachmentChip
+                  key={file.id}
+                  attachment={file}
+                  onRemove={() => removeAttachment(file.id)}
+                />
+              ))}
+            </div>
+          ) : null}
+
+          <textarea
+            ref={ref}
+            rows={1}
+            spellCheck={false}
+            placeholder={
+              shell
+                ? "How can I help you today?"
+                : "Ask, build, / for skills... "
+            }
+            className={`max-h-40 w-full resize-none overflow-x-hidden bg-transparent px-3 text-sm leading-5.5 text-content outline-none placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap placeholder:text-content/40 font-sans ${
+              shell ? "py-4" : "py-3"
+            }`}
+            onFocus={onFocus}
+            onKeyDown={onKeyDown}
+            onPaste={onPaste}
+            onClick={(e) => syncSlashFromTextarea(e.currentTarget)}
+            onKeyUp={(e) => syncSlashFromTextarea(e.currentTarget)}
+            onSelect={(e) => syncSlashFromTextarea(e.currentTarget)}
+            onInput={(e) => {
+              const el = e.currentTarget;
+              resizeTextarea(el);
+              syncHasValue(el.value, attachments);
+              syncSlashFromTextarea(el);
+            }}
+          />
+
+          <div className="flex items-center gap-1 px-2 pb-2">
+            <ToolButton label="Attach files" onClick={attachFromPicker}>
+              <Plus className="size-3.5" strokeWidth={1.5} />
+            </ToolButton>
+            <div
+              className="composer-toolbar flex min-w-0 flex-1 items-center"
+              onWheel={(e) => {
+                if (
+                  e.target instanceof Element &&
+                  e.target.closest(
+                    "[data-model-picker], [data-access-picker], [data-model-settings]",
+                  )
+                ) {
+                  return;
+                }
+                const el = e.currentTarget;
+                if (el.scrollWidth <= el.clientWidth) return;
+                if (e.deltaX === 0 && e.deltaY !== 0) el.scrollLeft += e.deltaY;
+              }}
+            >
+              <div className="flex shrink-0 items-center gap-1">
+                <ModelPicker
+                  harness={harness}
+                  model={model}
+                  onChange={onModelChange}
+                  onClose={() => ref.current?.focus()}
+                />
+                <ModelSettings
+                  harness={harness}
+                  model={model}
+                  values={modelSettings}
+                  onChange={(settings) => onModelSettingsChange?.(settings)}
+                  onClose={() => ref.current?.focus()}
+                />
+                <AccessPicker
+                  value={runtimeMode}
+                  onChange={onRuntimeModeChange}
+                  onClose={() => ref.current?.focus()}
+                />
+              </div>
+            </div>
+
+            <div className="flex shrink-0 items-center gap-1">
+              <ComposerAction
+                busy={busy}
+                hasValue={hasValue}
+                onSend={() => submit(ref.current?.value ?? "")}
+                onStop={() => onStop?.()}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ComposerAction({
+  busy,
+  hasValue,
+  onSend,
+  onStop,
+}: {
+  busy: boolean;
+  hasValue: boolean;
+  onSend: () => void;
+  onStop: () => void;
+}) {
+  if (busy) {
+    return (
+      <>
+        {hasValue ? (
+          <button
+            type="button"
+            title="Send"
+            aria-label="Send"
+            onClick={onSend}
+            className="grid size-6.5 place-items-center rounded-md bg-white text-black hover:bg-white/90"
+          >
+            <ArrowUp className="size-3.5" strokeWidth={2.25} />
+          </button>
+        ) : null}
+        <button
+          type="button"
+          title="Stop"
+          aria-label="Stop"
+          onClick={onStop}
+          className="grid size-6.5 place-items-center rounded-md bg-white text-black hover:bg-white/90"
+        >
+          <Square className="size-2.5 fill-current" strokeWidth={0} />
+        </button>
+      </>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      title="Send"
+      aria-label="Send"
+      disabled={!hasValue}
+      onClick={onSend}
+      className="grid size-6.5 place-items-center rounded-md bg-white text-black hover:bg-white/90 disabled:cursor-default disabled:bg-white/30 disabled:text-black/40 disabled:hover:bg-white/30"
+    >
+      <ArrowUp className="size-3.5" strokeWidth={2.25} />
+    </button>
+  );
+}
+
+function hasFiles(data: DataTransfer | null): data is DataTransfer {
+  if (!data) return false;
+  return [...data.types].some(
+    (type) => type === "Files" || type === "application/x-moz-file",
+  );
+}

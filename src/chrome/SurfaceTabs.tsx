@@ -1,0 +1,177 @@
+import { GripVertical, SquareTerminal, X } from "lucide-react";
+import type { PointerEvent as ReactPointerEvent } from "react";
+import { basename } from "../lib/fs";
+import { isPlanTab, isReviewTab, isTerminalTab, type FilePaneTab } from "../lib/layout";
+import { terminalTabLabel } from "../lib/terminalTab";
+import { useLockOverscroll } from "../lib/useLockOverscroll";
+import { useSortable } from "../lib/useSortable";
+import { FileTypeIcon } from "./FileTypeIcon";
+
+type Props = {
+  files: FilePaneTab[];
+  activeFileId: string;
+  dirtyFileIds: Set<string>;
+  onSelectFile: (fileId: string) => void;
+  onCloseFile: (fileId: string) => void;
+  onReorder: (ids: string[]) => void;
+  onPaneDragStart?: (event: ReactPointerEvent<HTMLElement>) => void;
+};
+
+export function SurfaceTabs({
+  files,
+  activeFileId,
+  dirtyFileIds,
+  onSelectFile,
+  onCloseFile,
+  onReorder,
+  onPaneDragStart,
+}: Props) {
+  const lockOverscroll = useLockOverscroll<HTMLDivElement>();
+  const fileIds = files.map((file) => file.id);
+  const sortable = useSortable(fileIds, onReorder);
+  const canDrag = files.length > 1;
+
+  return (
+    <div
+      ref={lockOverscroll}
+      role="tablist"
+      aria-label="Open files"
+      className="scrollbar-none flex h-9 shrink-0 overflow-x-auto overscroll-none border-b border-content/10 bg-content/2"
+    >
+      {onPaneDragStart ? (
+        <div
+          role="button"
+          title="Drag to reorder pane"
+          aria-label="Drag to reorder pane"
+          tabIndex={-1}
+          className="grid h-full w-5 shrink-0 cursor-grab place-items-center text-content/35 hover:bg-content/5 hover:text-content/70 active:cursor-grabbing touch-none"
+          onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            event.stopPropagation();
+            onPaneDragStart(event);
+          }}
+        >
+          <GripVertical className="size-3.5" strokeWidth={1.75} />
+        </div>
+      ) : null}
+      {files.map((file, index) => {
+        const active = file.id === activeFileId;
+        const dirty = dirtyFileIds.has(file.id);
+        const review = isReviewTab(file);
+        const terminal = isTerminalTab(file);
+        const name = isPlanTab(file)
+          ? file.plan?.title?.trim() || "Plan"
+          : terminal
+            ? terminalTabLabel(file)
+            : basename(file.path);
+        const label = review ? `${name} (Working Tree)` : name;
+        const iconName = isPlanTab(file) ? "plan.md" : name;
+        const dragging = sortable.draggingId === file.id;
+        const showStart =
+          sortable.draggingId &&
+          sortable.toIndex === index &&
+          sortable.fromIndex !== null &&
+          sortable.toIndex < sortable.fromIndex;
+        const showEnd =
+          sortable.draggingId &&
+          sortable.toIndex === index &&
+          sortable.fromIndex !== null &&
+          sortable.toIndex > sortable.fromIndex;
+        return (
+          <div
+            key={file.id}
+            ref={(el) => sortable.setItemRef(file.id, el)}
+            className={`group relative flex w-52 min-w-28 shrink touch-none items-stretch border-r border-content/10 ${
+              active ? "bg-content/8" : "hover:bg-content/5"
+            } ${dragging ? "opacity-40" : ""} ${
+              canDrag ? "cursor-grab active:cursor-grabbing" : ""
+            }`}
+            onPointerDown={(event) => {
+              if (event.button !== 0) return;
+              if (
+                (event.target as HTMLElement | null)?.closest("[data-no-drag]")
+              ) {
+                return;
+              }
+              onSelectFile(file.id);
+              sortable.onItemPointerDown(file.id, event);
+            }}
+          >
+            {showStart ? (
+              <div className="pointer-events-none absolute inset-y-0 left-0 z-20 w-0.5 bg-accent" />
+            ) : null}
+            {showEnd ? (
+              <div className="pointer-events-none absolute inset-y-0 right-0 z-20 w-0.5 bg-accent" />
+            ) : null}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={active}
+              title={
+                isPlanTab(file)
+                  ? name
+                  : terminal
+                    ? `${name} — ${file.cwd}`
+                    : review
+                      ? `${file.path} (Working Tree)`
+                      : file.path
+              }
+              onClick={() => {
+                if (sortable.consumeClick()) return;
+                onSelectFile(file.id);
+              }}
+              className={`flex min-w-0 flex-1 items-center gap-1.5 px-3 pr-8 text-left text-[12px] ${
+                canDrag ? "cursor-grab active:cursor-grabbing" : ""
+              } ${
+                active ? "text-content" : "text-content/55 hover:text-content"
+              }`}
+            >
+              {terminal ? (
+                <SquareTerminal className="size-3.5 shrink-0" strokeWidth={1.75} />
+              ) : (
+                <FileTypeIcon name={iconName} isDir={false} size={15} />
+              )}
+              <span className={`min-w-0 flex-1 truncate ${review ? "italic" : ""}`}>
+                {label}
+              </span>
+              {dirty ? (
+                <span
+                  className="size-1.5 shrink-0 rounded-full bg-content/75"
+                  title="Unsaved changes"
+                  aria-label="Unsaved changes"
+                />
+              ) : null}
+            </button>
+            <button
+              type="button"
+              title={`Close ${label}`}
+              aria-label={`Close ${label}`}
+              data-no-drag
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                onCloseFile(file.id);
+              }}
+              className={`absolute right-1.5 top-1/2 grid size-5 -translate-y-1/2 place-items-center rounded text-content/50 hover:bg-content/10 hover:text-content ${
+                active ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+              }`}
+            >
+              <X className="size-3" strokeWidth={1.75} />
+            </button>
+          </div>
+        );
+      })}
+      {onPaneDragStart ? (
+        <div
+          className="min-w-4 flex-1 cursor-grab active:cursor-grabbing"
+          onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            onPaneDragStart(event);
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}

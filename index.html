@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MonoCode</title>
+    <script>
+      (function () {
+        try {
+          var root = document.documentElement;
+          var hue = localStorage.getItem("monocode.themeHue");
+          var sat = localStorage.getItem("monocode.themeSaturation");
+          var opacity = localStorage.getItem("monocode.sidebarOpacity");
+          if (hue != null) {
+            var h = Math.max(0, Math.min(360, Number(hue) || 0));
+            root.style.setProperty("--theme-hue", String(h));
+          }
+          if (sat != null) {
+            var s = Math.max(0, Math.min(100, Number(sat) || 0));
+            root.style.setProperty("--theme-saturation", s + "%");
+          }
+          if (opacity != null) {
+            var o = Math.max(0.15, Math.min(1, Number(opacity) || 0.85));
+            root.style.setProperty("--sidebar-opacity", String(o));
+          }
+          var bodyGlass = localStorage.getItem("monocode.bodyGlass");
+          if (bodyGlass == null || bodyGlass === "1" || bodyGlass === "true") {
+            root.classList.add("glass-body");
+          }
+        } catch (_) {}
+      })();
+    </script>
+    <style>
+      :root {
+        --theme-hue: 240;
+        --theme-saturation: 0%;
+        --sidebar-opacity: 0.85;
+      }
+
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+        background: transparent;
+      }
+
+      #boot-splash.boot-splash-out img {
+        opacity: 0;
+        transition: opacity 0.12s ease;
+      }
+
+      #boot-splash img {
+        width: 72px;
+        height: 72px;
+        object-fit: contain;
+        display: block;
+        transition: opacity 0.12s ease;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="boot-splash" aria-hidden="true">
+      <img src="/monocode.png" alt="" />
+    </div>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

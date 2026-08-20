@@ -1,0 +1,188 @@
+import { invoke } from "@tauri-apps/api/core";
+import { persistableAttachment } from "./attachments";
+import { normalizeProjectPath } from "./recents";
+import type {
+  Block,
+  HarnessId,
+  RuntimeMode,
+  Session,
+} from "./session";
+import { HARNESSES, RUNTIME_MODES } from "./session";
+
+export type SessionSummary = {
+  id: string;
+  cwd: string;
+  harness: HarnessId;
+  model: string;
+  runtimeMode: RuntimeMode;
+  title: string;
+  providerSessionId?: string;
+  branch?: string;
+  repo?: string;
+  additions?: number;
+  deletions?: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+type SessionRecord = {
+  id: string;
+  cwd: string;
+  harness: string;
+  model: string;
+  modelSettings: Record<string, string>;
+  runtimeMode: string;
+  title: string;
+  providerSessionId?: string | null;
+  blocks: Block[];
+  createdAt: number;
+  updatedAt: number;
+};
+
+type SessionUpsertPayload = {
+  id: string;
+  cwd: string;
+  harness: string;
+  model: string;
+  modelSettings: Record<string, string>;
+  runtimeMode: string;
+  title: string;
+  providerSessionId?: string;
+  blocks: Block[];
+};
+
+/** Only real chats belong in project history — blank tabs stay ephemeral. */
+export function shouldPersistSession(session: Session): boolean {
+  return (
+    session.cwd !== "~" &&
+    session.blocks.some((block) => block.role === "user")
+  );
+}
+
+export function sanitizeSessionForPersist(session: Session): SessionUpsertPayload {
+  return {
+    id: session.id,
+    cwd: normalizeProjectPath(session.cwd),
+    harness: session.harness,
+    model: session.model,
+    modelSettings: session.modelSettings,
+    runtimeMode: session.runtimeMode,
+    title: session.title,
+    ...(session.providerSessionId
+      ? { providerSessionId: session.providerSessionId }
+      : {}),
+    blocks: session.blocks
+      .map(sanitizeBlock)
+      .filter((block): block is Block => block != null),
+  };
+}
+
+export async function upsertSession(session: Session): Promise<SessionSummary | null> {
+  if (!shouldPersistSession(session)) return null;
+  const summary = await invoke<SessionSummary>("session_upsert", {
+    session: sanitizeSessionForPersist(session),
+  });
+  return normalizeSummary(summary);
+}
+
+export function persistFingerprint(session: Session): string {
+  return JSON.stringify(sanitizeSessionForPersist(session));
+}
+
+export async function listSessionsByProject(
+  cwd: string,
+): Promise<SessionSummary[]> {
+  if (!cwd || cwd === "~") return [];
+  const rows = await invoke<SessionSummary[]>("session_list_by_project", {
+    cwd: normalizeProjectPath(cwd),
+  });
+  return rows.map(normalizeSummary);
+}
+
+export async function getSession(sessionId: string): Promise<Session | null> {
+  const record = await invoke<SessionRecord | null>("session_get", {
+    sessionId,
+  });
+  if (!record) return null;
+  return recordToSession(record);
+}
+
+export async function deleteSession(sessionId: string): Promise<void> {
+  await invoke<void>("session_delete", { sessionId });
+}
+
+function sanitizeBlock(block: Block): Block | null {
+  const next: Block = {
+    id: block.id,
+    role: block.role,
+    text: block.text,
+  };
+  if (block.attachments?.length) {
+    next.attachments = block.attachments.map(persistableAttachment);
+  }
+  if (block.startedAt != null) next.startedAt = block.startedAt;
+  if (block.durationMs != null) next.durationMs = block.durationMs;
+  if (block.tool) next.tool = block.tool;
+  if (block.approval?.decided) {
+    next.approval = {
+      requestId: block.approval.requestId,
+      decided: block.approval.decided,
+    };
+  } else if (block.approval && !block.approval.decided) {
+    // Drop stale live approval prompts; request ids don't survive restarts.
+    if (block.role === "approval") return null;
+  }
+  return next;
+}
+
+function normalizeSummary(summary: SessionSummary): SessionSummary {
+  return {
+    ...summary,
+    harness: asHarness(summary.harness),
+    runtimeMode: asRuntimeMode(summary.runtimeMode),
+    ...(summary.providerSessionId
+      ? { providerSessionId: summary.providerSessionId }
+      : {}),
+    ...(summary.branch ? { branch: summary.branch } : {}),
+    ...(summary.repo ? { repo: summary.repo } : {}),
+    additions: summary.additions ?? 0,
+    deletions: summary.deletions ?? 0,
+  };
+}
+
+function recordToSession(record: SessionRecord): Session {
+  const blocks = Array.isArray(record.blocks)
+    ? record.blocks
+        .map(sanitizeBlock)
+        .filter((block): block is Block => block != null)
+    : [];
+  return {
+    id: record.id,
+    cwd: record.cwd,
+    harness: asHarness(record.harness),
+    model: record.model,
+    modelSettings:
+      record.modelSettings && typeof record.modelSettings === "object"
+        ? record.modelSettings
+        : {},
+    runtimeMode: asRuntimeMode(record.runtimeMode),
+    title: record.title,
+    blocks,
+    busy: false,
+    ...(record.providerSessionId
+      ? { providerSessionId: record.providerSessionId }
+      : {}),
+  };
+}
+
+function asHarness(value: string): HarnessId {
+  return (HARNESSES as string[]).includes(value)
+    ? (value as HarnessId)
+    : "cursor";
+}
+
+function asRuntimeMode(value: string): RuntimeMode {
+  return (RUNTIME_MODES as string[]).includes(value)
+    ? (value as RuntimeMode)
+    : "supervised";
+}

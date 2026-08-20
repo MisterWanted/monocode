@@ -1,0 +1,143 @@
+use tauri::menu::{AboutMetadata, Menu, MenuItemBuilder, SubmenuBuilder};
+use tauri::{AppHandle, Emitter, Wry};
+
+pub fn install(app: &AppHandle) -> tauri::Result<()> {
+    app.set_menu(build(app)?)?;
+    Ok(())
+}
+
+pub fn dispatch(app: &AppHandle, id: &str) {
+    match id {
+        "new_window" => {
+            let _ = crate::window::open_new_window(app);
+        }
+        "new_tab" | "close_tab" | "next_tab" | "prev_tab" | "split_right" | "split_down"
+        | "focus_left" | "focus_right" | "focus_up" | "focus_down" | "toggle_sidebar"
+        | "sidebar_opacity" | "open_project" | "go_to_file" | "find_in_project" | "find"
+        | "new_terminal" | "new_terminal_tab" => {
+            let _ = app.emit(id, ());
+        }
+        _ => {}
+    }
+}
+
+fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
+    let new_window = MenuItemBuilder::with_id("new_window", "New Window")
+        .accelerator("CmdOrCtrl+Shift+N")
+        .build(app)?;
+    let open_project = MenuItemBuilder::with_id("open_project", "Open Project…")
+        .accelerator("CmdOrCtrl+O")
+        .build(app)?;
+    let go_to_file = MenuItemBuilder::with_id("go_to_file", "Go to File…")
+        .accelerator("CmdOrCtrl+P")
+        .build(app)?;
+    let new_tab = MenuItemBuilder::with_id("new_tab", "New Tab")
+        .accelerator("CmdOrCtrl+T")
+        .build(app)?;
+    let new_terminal = MenuItemBuilder::with_id("new_terminal", "New Terminal")
+        .accelerator("CmdOrCtrl+`")
+        .build(app)?;
+    let new_terminal_tab = MenuItemBuilder::with_id("new_terminal_tab", "New Terminal Tab")
+        .accelerator("CmdOrCtrl+Shift+`")
+        .build(app)?;
+    let split_right = MenuItemBuilder::with_id("split_right", "Split Pane Right")
+        .accelerator("CmdOrCtrl+D")
+        .build(app)?;
+    let split_down = MenuItemBuilder::with_id("split_down", "Split Pane Down")
+        .accelerator("CmdOrCtrl+Shift+D")
+        .build(app)?;
+    let close_tab = MenuItemBuilder::with_id("close_tab", "Close Pane")
+        .accelerator("CmdOrCtrl+W")
+        .build(app)?;
+    let next_tab = MenuItemBuilder::with_id("next_tab", "Next Tab")
+        .accelerator("CmdOrCtrl+Shift+]")
+        .build(app)?;
+    let prev_tab = MenuItemBuilder::with_id("prev_tab", "Previous Tab")
+        .accelerator("CmdOrCtrl+Shift+[")
+        .build(app)?;
+
+    let focus_left = MenuItemBuilder::with_id("focus_left", "Focus Pane Left")
+        .accelerator("CmdOrCtrl+Alt+Left")
+        .build(app)?;
+    let focus_right = MenuItemBuilder::with_id("focus_right", "Focus Pane Right")
+        .accelerator("CmdOrCtrl+Alt+Right")
+        .build(app)?;
+    let focus_up = MenuItemBuilder::with_id("focus_up", "Focus Pane Up")
+        .accelerator("CmdOrCtrl+Alt+Up")
+        .build(app)?;
+    let focus_down = MenuItemBuilder::with_id("focus_down", "Focus Pane Down")
+        .accelerator("CmdOrCtrl+Alt+Down")
+        .build(app)?;
+
+    let toggle_sidebar = MenuItemBuilder::with_id("toggle_sidebar", "Toggle Sidebar")
+        .accelerator("CmdOrCtrl+B")
+        .build(app)?;
+    let sidebar_opacity =
+        MenuItemBuilder::with_id("sidebar_opacity", "Sidebar Appearance…").build(app)?;
+    let find = MenuItemBuilder::with_id("find", "Find")
+        .accelerator("CmdOrCtrl+F")
+        .build(app)?;
+
+    let find_in_project = MenuItemBuilder::with_id("find_in_project", "Find in Files…")
+        .accelerator("CmdOrCtrl+Shift+F")
+        .build(app)?;
+
+    let file = SubmenuBuilder::new(app, "File")
+        .item(&new_window)
+        .item(&open_project)
+        .item(&go_to_file)
+        .item(&find_in_project)
+        .separator()
+        .item(&new_tab)
+        .item(&new_terminal)
+        .item(&new_terminal_tab)
+        .item(&split_right)
+        .item(&split_down)
+        .item(&close_tab)
+        .separator()
+        .item(&prev_tab)
+        .item(&next_tab)
+        .build()?;
+
+    let view = SubmenuBuilder::new(app, "View")
+        .item(&toggle_sidebar)
+        .separator()
+        .item(&focus_left)
+        .item(&focus_right)
+        .item(&focus_up)
+        .item(&focus_down)
+        .separator()
+        .item(&sidebar_opacity)
+        .build()?;
+
+    let edit = SubmenuBuilder::new(app, "Edit")
+        .undo()
+        .redo()
+        .separator()
+        .cut()
+        .copy()
+        .paste()
+        .select_all()
+        .separator()
+        .item(&find)
+        .build()?;
+
+    #[cfg(target_os = "macos")]
+    {
+        let app_menu = SubmenuBuilder::new(app, "MonoCode")
+            .about(Some(AboutMetadata::default()))
+            .separator()
+            .hide()
+            .hide_others()
+            .show_all()
+            .separator()
+            .quit()
+            .build()?;
+        let window_menu = SubmenuBuilder::new(app, "Window").build()?;
+        window_menu.set_as_windows_menu_for_nsapp()?;
+        return Menu::with_items(app, &[&app_menu, &file, &edit, &view, &window_menu]);
+    }
+
+    #[allow(unreachable_code)]
+    Menu::with_items(app, &[&file, &edit, &view])
+}

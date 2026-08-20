@@ -1,0 +1,150 @@
+import {
+  composeToolTitle,
+  isEditTool,
+  isWeakToolTitle,
+} from "../lib/harness/preview";
+import { displayPath } from "../lib/paths";
+import type { Block } from "../lib/session";
+
+export type ToolCallState = "pending" | "accepted" | "rejected";
+
+export type TurnItem =
+  | { type: "block"; block: Block }
+  | { type: "activity"; blocks: Block[] };
+
+export function needsApproval(block: Block): boolean {
+  return !!block.approval && !block.approval.decided;
+}
+
+export function toolCallState(block: Block): ToolCallState {
+  const status = block.tool?.status?.toLowerCase() ?? "";
+  const decided = block.approval?.decided;
+
+  if (decided === "deny") return "rejected";
+  if (
+    status === "failed" ||
+    status === "error" ||
+    status === "cancelled" ||
+    status === "canceled"
+  ) {
+    return "rejected";
+  }
+  if (needsApproval(block)) return "pending";
+  if (status === "completed" || status === "success") return "accepted";
+  if (
+    block.streaming ||
+    status === "in_progress" ||
+    status === "pending" ||
+    status === "running"
+  ) {
+    return "pending";
+  }
+  if (decided === "allow" || !status) return "accepted";
+  return "pending";
+}
+
+export function toolCallLabel(block: Block, cwd?: string): string {
+  const preview = block.tool?.preview;
+  const path = preview?.path
+    ? displayPath(preview.path, cwd)
+    : preview?.fileName;
+  return (
+    composeToolTitle({
+      kind: block.tool?.kind,
+      title: block.text || block.tool?.title,
+      path,
+      query: preview?.query,
+      previewKind: preview?.kind,
+    }) || "Working"
+  );
+}
+
+export function isIncompleteTool(
+  block: Block,
+  label: string,
+  state: ToolCallState,
+): boolean {
+  if (state !== "pending") return false;
+  const kind = block.tool?.kind?.toLowerCase();
+  if (kind && kind !== "other") return false;
+  if (
+    block.tool?.preview?.path ||
+    block.tool?.preview?.query ||
+    block.tool?.preview?.lines?.length
+  ) {
+    return false;
+  }
+  return !label || isWeakToolTitle(label);
+}
+
+export function isHiddenTool(block: Block): boolean {
+  if (block.role !== "tool" && block.role !== "approval") return false;
+  if (
+    isEditTool(
+      block.tool?.kind,
+      block.text || block.tool?.title,
+      block.tool?.preview,
+    )
+  ) {
+    return false;
+  }
+  const state = toolCallState(block);
+  return isIncompleteTool(block, toolCallLabel(block), state);
+}
+
+export function isActivityBlock(block: Block): boolean {
+  if (block.role !== "tool" && block.role !== "approval") return false;
+  if (
+    isEditTool(
+      block.tool?.kind,
+      block.text || block.tool?.title,
+      block.tool?.preview,
+    )
+  ) {
+    return false;
+  }
+  return !isHiddenTool(block);
+}
+
+export function groupTurnItems(blocks: Block[]): TurnItem[] {
+  const items: TurnItem[] = [];
+  let activity: Block[] = [];
+  const flush = () => {
+    if (activity.length > 0) {
+      items.push({ type: "activity", blocks: activity });
+    }
+    activity = [];
+  };
+  for (const block of blocks) {
+    if (isIgnoredTurnBlock(block)) continue;
+    if (isHiddenTool(block)) continue;
+    if (isActivityBlock(block)) {
+      activity.push(block);
+      continue;
+    }
+    flush();
+    items.push({ type: "block", block });
+  }
+  flush();
+  return items;
+}
+
+function isIgnoredTurnBlock(block: Block): boolean {
+  if (block.role === "reasoning") return true;
+  return block.role === "assistant" && !block.text.trim();
+}
+
+export function splitActivityRows(blocks: Block[]): {
+  latest?: Block;
+  pending: Block[];
+  hidden: Block[];
+} {
+  const pending = blocks.filter(needsApproval);
+  const completed = blocks.filter((block) => !needsApproval(block));
+  const latest = completed[completed.length - 1];
+  return {
+    latest,
+    pending,
+    hidden: latest ? completed.slice(0, -1) : completed,
+  };
+}
