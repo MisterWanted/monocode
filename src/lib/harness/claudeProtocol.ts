@@ -721,3 +721,69 @@ export function claudeSettingsKey(input: {
     input.runtimeMode,
   ].join("|");
 }
+
+function numberField(
+  rec: Record<string, unknown> | null | undefined,
+  key: string,
+): number {
+  const value = rec?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+/**
+ * Tokens occupying the window for one request.
+ *
+ * Cached reads still take up window space, so they count the same as fresh
+ * input; output counts because it carries into the next request.
+ */
+function contextUsedFromUsage(usage: Record<string, unknown> | null): number {
+  if (!usage) return 0;
+  return (
+    numberField(usage, "input_tokens") +
+    numberField(usage, "cache_creation_input_tokens") +
+    numberField(usage, "cache_read_input_tokens") +
+    numberField(usage, "output_tokens")
+  );
+}
+
+/**
+ * Context level from an `assistant` message. Callers must skip subagent
+ * messages — subagents run their own window and would make the reading jump.
+ */
+export function contextUsedFromAssistant(
+  rec: Record<string, unknown>,
+): number | undefined {
+  const usage = asRecord(asRecord(rec.message)?.usage);
+  if (!usage) return undefined;
+  const used = contextUsedFromUsage(usage);
+  return used > 0 ? used : undefined;
+}
+
+/**
+ * Context level and window from a turn `result`.
+ *
+ * `usage` at the top level sums every iteration of the turn, so the last entry
+ * of `usage.iterations` is what actually sits in the window. `modelUsage`
+ * carries the window itself, which is why we let the CLI tell us rather than
+ * keeping a model table in sync.
+ */
+export function contextFromResult(
+  rec: Record<string, unknown>,
+): { used?: number; window?: number } | undefined {
+  const usage = asRecord(rec.usage);
+  const iterations = Array.isArray(usage?.iterations) ? usage.iterations : [];
+  const last = asRecord(iterations[iterations.length - 1]);
+  const used = contextUsedFromUsage(last ?? usage);
+
+  let window: number | undefined;
+  const modelUsage = asRecord(rec.modelUsage);
+  for (const entry of Object.values(modelUsage ?? {})) {
+    const contextWindow = numberField(asRecord(entry), "contextWindow");
+    if (contextWindow > 0) {
+      window = Math.max(window ?? 0, contextWindow);
+    }
+  }
+
+  if (!used && !window) return undefined;
+  return { used: used > 0 ? used : undefined, window };
+}

@@ -17,6 +17,7 @@ import {
   pickAttachments,
   revokeAttachment,
 } from "../lib/attachments";
+import type { ContextUsage } from "../lib/contextUsage";
 import type { RecentProject } from "../lib/recents";
 import type { Attachment, HarnessId, RuntimeMode } from "../lib/session";
 import {
@@ -31,6 +32,7 @@ import {
   type SlashToken,
 } from "../lib/skills";
 import { AccessPicker } from "./AccessPicker";
+import { ContextMeter } from "./ContextMeter";
 import { AttachmentChip } from "./AttachmentChip";
 import { BranchPicker } from "./BranchPicker";
 import { CwdPicker } from "./CwdPicker";
@@ -51,6 +53,7 @@ type Props = {
   runtimeMode: RuntimeMode;
   cwd?: string;
   recents?: RecentProject[];
+  context?: ContextUsage;
   busy?: boolean;
   onFocus: () => void;
   onCwdChange: (cwd: string) => void;
@@ -105,6 +108,7 @@ export function Composer({
   runtimeMode,
   cwd = "~",
   recents = [],
+  context,
   busy = false,
   onFocus,
   onCwdChange,
@@ -509,6 +513,9 @@ export function Composer({
               enabled={enabled}
               onClose={() => ref.current?.focus()}
             />
+            <div className="ml-auto flex shrink-0 items-center">
+              <ContextMeter usage={context} />
+            </div>
           </div>
 
           {attachments.length > 0 ? (

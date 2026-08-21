@@ -1,3 +1,4 @@
+import type { ContextUsage } from "./contextUsage";
 import { defaultModelId, preferredModelSettings, resolveModel } from "./models";
 
 export type HarnessId = "claude" | "codex" | "cursor" | "opencode";
@@ -124,6 +125,8 @@ export type Session = {
   busy?: boolean;
   /** Provider-side conversation id (Cursor ACP session id). */
   providerSessionId?: string;
+  /** Context-window level reported by the harness. Absent until it reports. */
+  context?: ContextUsage;
 };
 
 export const HARNESS_LABEL: Record<HarnessId, string> = {

@@ -5,6 +5,8 @@ import {
   askUserQuestionAllowInput,
   buildClaudeSpawnArgs,
   buildClaudeUserMessage,
+  contextFromResult,
+  contextUsedFromAssistant,
   extractExitPlanModePlan,
   isTodoTool,
   normalizeClaudeCliEffort,
@@ -336,5 +338,66 @@ describe("helpers", () => {
     expect(
       statusTextFromSystem({ type: "assistant", message: "hello" }),
     ).toBeUndefined();
+  });
+});
+
+describe("contextUsedFromAssistant", () => {
+  it("counts cached reads and writes as window occupancy", () => {
+    // Shape captured from `claude --output-format stream-json --verbose`.
+    const rec = {
+      type: "assistant",
+      message: {
+        usage: {
+          input_tokens: 2,
+          cache_creation_input_tokens: 12941,
+          cache_read_input_tokens: 16652,
+          output_tokens: 3,
+        },
+      },
+    };
+    expect(contextUsedFromAssistant(rec)).toBe(29598);
+  });
+
+  it("ignores a message with no usage", () => {
+    expect(contextUsedFromAssistant({ type: "assistant", message: {} })).toBeUndefined();
+  });
+});
+
+describe("contextFromResult", () => {
+  it("reads the window the CLI reports rather than a model table", () => {
+    const rec = {
+      type: "result",
+      usage: {
+        input_tokens: 2,
+        cache_creation_input_tokens: 12941,
+        cache_read_input_tokens: 16652,
+        output_tokens: 13,
+      },
+      modelUsage: {
+        "claude-sonnet-5": { contextWindow: 1000000, maxOutputTokens: 64000 },
+      },
+    };
+    expect(contextFromResult(rec)).toEqual({ used: 29608, window: 1000000 });
+  });
+
+  it("uses the last iteration, since top-level usage sums the whole turn", () => {
+    const rec = {
+      type: "result",
+      usage: {
+        input_tokens: 10,
+        cache_read_input_tokens: 90_000,
+        output_tokens: 500,
+        iterations: [
+          { input_tokens: 5, cache_read_input_tokens: 20_000, output_tokens: 200 },
+          { input_tokens: 5, cache_read_input_tokens: 70_000, output_tokens: 300 },
+        ],
+      },
+      modelUsage: { "claude-opus-5": { contextWindow: 200000 } },
+    };
+    expect(contextFromResult(rec)).toEqual({ used: 70_305, window: 200000 });
+  });
+
+  it("has nothing to report for a turn that never called the API", () => {
+    expect(contextFromResult({ type: "result", usage: {} })).toBeUndefined();
   });
 });

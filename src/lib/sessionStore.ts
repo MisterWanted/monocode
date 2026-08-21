@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { persistableAttachment } from "./attachments";
+import type { ContextUsage } from "./contextUsage";
 import { normalizeProjectPath } from "./recents";
 import type {
   Block,
@@ -35,6 +36,8 @@ type SessionRecord = {
   title: string;
   providerSessionId?: string | null;
   blocks: Block[];
+  contextUsed?: number | null;
+  contextWindow?: number | null;
   createdAt: number;
   updatedAt: number;
 };
@@ -49,6 +52,8 @@ type SessionUpsertPayload = {
   title: string;
   providerSessionId?: string;
   blocks: Block[];
+  contextUsed?: number;
+  contextWindow?: number;
 };
 
 /** Only real chats belong in project history — blank tabs stay ephemeral. */
@@ -74,6 +79,10 @@ export function sanitizeSessionForPersist(session: Session): SessionUpsertPayloa
     blocks: session.blocks
       .map(sanitizeBlock)
       .filter((block): block is Block => block != null),
+    ...(session.context ? { contextUsed: session.context.used } : {}),
+    ...(session.context?.window
+      ? { contextWindow: session.context.window }
+      : {}),
   };
 }
 
@@ -172,6 +181,27 @@ function recordToSession(record: SessionRecord): Session {
     ...(record.providerSessionId
       ? { providerSessionId: record.providerSessionId }
       : {}),
+    ...(contextFromRecord(record) ?? {}),
+  };
+}
+
+/**
+ * Last known reading from a stored session. The harness re-reports on the next
+ * turn, so this only has to survive until then.
+ */
+function contextFromRecord(
+  record: SessionRecord,
+): { context: ContextUsage } | undefined {
+  const used = record.contextUsed;
+  if (typeof used !== "number" || !Number.isFinite(used) || used <= 0) {
+    return undefined;
+  }
+  const window = record.contextWindow;
+  return {
+    context:
+      typeof window === "number" && Number.isFinite(window) && window > 0
+        ? { used, window }
+        : { used },
   };
 }
 

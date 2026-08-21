@@ -323,6 +323,31 @@ export function sessionErrorMessage(error: unknown): string {
   return message ?? "OpenCode session failed.";
 }
 
+/**
+ * Context level from an OpenCode assistant message `info`.
+ *
+ * Cached reads still occupy the window, so they count alongside fresh input;
+ * output counts because it carries into the next request.
+ */
+export function contextUsedFromMessageInfo(
+  info: Record<string, unknown> | null,
+): number | undefined {
+  const tokens = asRecord(info?.tokens);
+  if (!tokens) return undefined;
+  const cache = asRecord(tokens.cache);
+  const num = (rec: Record<string, unknown> | null, key: string): number => {
+    const value = rec?.[key];
+    return typeof value === "number" && Number.isFinite(value) ? value : 0;
+  };
+  const used =
+    num(tokens, "input") +
+    num(tokens, "output") +
+    num(tokens, "reasoning") +
+    num(cache, "read") +
+    num(cache, "write");
+  return used > 0 ? used : undefined;
+}
+
 export function eventSessionId(event: Record<string, unknown>): string | undefined {
   const properties = asRecord(event.properties);
   if (!properties) return undefined;

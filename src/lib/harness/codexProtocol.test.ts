@@ -321,3 +321,66 @@ describe("parseCodexModelList", () => {
     ).toBe("medium");
   });
 });
+
+describe("mapCodexNotification thread/tokenUsage/updated", () => {
+  it("reports the last request and the window the app-server supplies", () => {
+    const mapped = mapCodexNotification("thread/tokenUsage/updated", {
+      threadId: "t1",
+      turnId: "turn1",
+      tokenUsage: {
+        last: {
+          totalTokens: 42_000,
+          inputTokens: 40_000,
+          cachedInputTokens: 30_000,
+          cacheWriteInputTokens: 0,
+          outputTokens: 2_000,
+          reasoningOutputTokens: 500,
+        },
+        total: {
+          totalTokens: 900_000,
+          inputTokens: 880_000,
+          cachedInputTokens: 800_000,
+          cacheWriteInputTokens: 0,
+          outputTokens: 20_000,
+          reasoningOutputTokens: 4_000,
+        },
+        modelContextWindow: 272_000,
+      },
+    });
+    expect(mapped.events).toEqual([
+      { type: "context", used: 42_000, window: 272_000 },
+    ]);
+  });
+
+  it("never uses `total`, which keeps climbing past the window", () => {
+    const mapped = mapCodexNotification("thread/tokenUsage/updated", {
+      tokenUsage: {
+        last: { totalTokens: 10_000 },
+        total: { totalTokens: 5_000_000 },
+        modelContextWindow: 272_000,
+      },
+    });
+    expect(mapped.events).toEqual([
+      { type: "context", used: 10_000, window: 272_000 },
+    ]);
+  });
+
+  it("omits the window when the app-server does not know it", () => {
+    const mapped = mapCodexNotification("thread/tokenUsage/updated", {
+      tokenUsage: {
+        last: { totalTokens: 10_000 },
+        total: { totalTokens: 10_000 },
+        modelContextWindow: null,
+      },
+    });
+    expect(mapped.events).toEqual([{ type: "context", used: 10_000 }]);
+  });
+
+  it("stays quiet on an empty reading", () => {
+    expect(
+      mapCodexNotification("thread/tokenUsage/updated", {
+        tokenUsage: { last: {}, total: {} },
+      }).events,
+    ).toEqual([]);
+  });
+});

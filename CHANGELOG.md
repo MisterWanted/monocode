@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Context meter in the composer: a ring showing how much of the model context window the session is using, with exact token counts on hover. It turns amber at 75% and red at 90%.
+- Context usage is read from each CLI rather than estimated, so the window matches whatever model the session actually runs. Claude Code, Codex, and OpenCode report it; Cursor does not expose token usage over ACP, so no meter is shown for Cursor sessions.
+- The last context reading is stored with the session, so reopening a closed session shows its meter right away instead of waiting for the next turn.
+
+### Fixed
+
+- A tab is removed from its group when its session's project no longer matches the other tabs in that group.
+
 ## [0.1.0] - 2026-08-20
 
 First public release. macOS (Apple Silicon) only.

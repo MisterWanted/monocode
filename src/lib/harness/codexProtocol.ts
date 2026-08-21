@@ -150,6 +150,14 @@ export function stringField(
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+function numberField(
+  rec: Record<string, unknown> | null | undefined,
+  key: string,
+): number {
+  const value = rec?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
 export type CodexApprovalKind = "command" | "file-change" | "permissions";
 
 export type CodexApprovalDecisionWire =
@@ -256,6 +264,10 @@ export function mapCodexNotification(
     return mapFileChangePatch(rec);
   }
 
+  if (method === "thread/tokenUsage/updated") {
+    return mapTokenUsage(rec);
+  }
+
   if (method === "turn/started") {
     const turn = asRecord(rec.turn);
     const turnId = stringField(turn, "id");
@@ -301,6 +313,29 @@ const SILENT_ITEM_TYPES = new Set([
   "enteredReviewMode",
   "subAgentActivity",
 ]);
+
+/**
+ * Codex reports both `last` (the most recent request) and `total` (cumulative
+ * thread spend). Only `last` describes the context window — `total` keeps
+ * climbing across compactions and would run past 100%.
+ */
+function mapTokenUsage(rec: Record<string, unknown>): MappedCodexNotification {
+  const usage = asRecord(rec.tokenUsage);
+  const last = asRecord(usage?.last);
+  if (!last) return { events: [] };
+  const used = numberField(last, "totalTokens");
+  const window = numberField(usage, "modelContextWindow");
+  if (!used && !window) return { events: [] };
+  return {
+    events: [
+      {
+        type: "context",
+        ...(used > 0 ? { used } : {}),
+        ...(window > 0 ? { window } : {}),
+      },
+    ],
+  };
+}
 
 function mapTurnTerminal(
   method: string,

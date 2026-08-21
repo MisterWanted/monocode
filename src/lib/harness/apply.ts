@@ -1,4 +1,5 @@
 import type { Attachment, Block, Session, ToolPreview } from "../session";
+import { mergeContextUsage } from "../contextUsage";
 import { displayPath } from "../paths";
 import {
   composeToolTitle,
@@ -55,6 +56,14 @@ export function applyHarnessEvent(
       );
       return { ...session, blocks };
     }
+    case "context":
+      return {
+        ...session,
+        context: mergeContextUsage(session.context, {
+          used: event.used,
+          window: event.window,
+        }),
+      };
     case "plan":
       return appendBlock(session, {
         id: crypto.randomUUID(),

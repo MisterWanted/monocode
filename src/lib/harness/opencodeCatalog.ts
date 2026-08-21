@@ -23,6 +23,7 @@ type OpenCodeModelJson = {
   id?: string;
   name?: string;
   variants?: Record<string, unknown>;
+  limit?: { context?: number; input?: number; output?: number };
 };
 
 type ParsedProvider = {
@@ -183,12 +184,14 @@ export function flattenOpenCodeModels(
     for (const [modelId, model] of Object.entries(provider.models)) {
       const name = model.name?.trim() || titleCaseSlug(modelId);
       const nativeId = `${provider.id}/${model.id ?? modelId}`;
+      const contextWindow = model.limit?.context;
       models.push({
         id: `opencode:${nativeId}`,
         harness: "opencode",
         name,
         nativeId,
         settings: openCodeModelSettings(provider.id, model, primaryAgents),
+        ...(contextWindow && contextWindow > 0 ? { contextWindow } : {}),
       });
     }
   }

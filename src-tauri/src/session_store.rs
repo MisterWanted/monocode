@@ -76,6 +76,11 @@ pub struct SessionUpsert {
     #[serde(default)]
     pub provider_session_id: Option<String>,
     pub blocks: Value,
+    /// Last context-window reading reported by the harness, if any.
+    #[serde(default)]
+    pub context_used: Option<i64>,
+    #[serde(default)]
+    pub context_window: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,6 +117,10 @@ pub struct SessionRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_session_id: Option<String>,
     pub blocks: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_used: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -197,6 +206,14 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             params![now_millis()],
         )?;
     }
+    if current < 3 {
+        conn.execute("ALTER TABLE sessions ADD COLUMN context_used INTEGER", [])?;
+        conn.execute("ALTER TABLE sessions ADD COLUMN context_window INTEGER", [])?;
+        conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (3, ?1)",
+            params![now_millis()],
+        )?;
+    }
     Ok(())
 }
 
@@ -232,8 +249,9 @@ fn upsert_session(conn: &Connection, session: &SessionUpsert) -> rusqlite::Resul
     conn.execute(
         "INSERT INTO sessions (
            id, cwd, harness, model, model_settings, runtime_mode, title,
-           provider_session_id, blocks_json, created_at, updated_at, branch
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+           provider_session_id, blocks_json, created_at, updated_at, branch,
+           context_used, context_window
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
          ON CONFLICT(id) DO UPDATE SET
            cwd = excluded.cwd,
            harness = excluded.harness,
@@ -244,7 +262,9 @@ fn upsert_session(conn: &Connection, session: &SessionUpsert) -> rusqlite::Resul
            provider_session_id = excluded.provider_session_id,
            blocks_json = excluded.blocks_json,
            updated_at = excluded.updated_at,
-           branch = excluded.branch",
+           branch = excluded.branch,
+           context_used = excluded.context_used,
+           context_window = excluded.context_window",
         params![
             session.id,
             session.cwd,
@@ -258,6 +278,8 @@ fn upsert_session(conn: &Connection, session: &SessionUpsert) -> rusqlite::Resul
             created_at,
             updated_at,
             branch,
+            session.context_used,
+            session.context_window,
         ],
     )?;
 
@@ -329,7 +351,8 @@ fn delete_session(conn: &Connection, session_id: &str) -> rusqlite::Result<()> {
 fn get_session(conn: &Connection, session_id: &str) -> rusqlite::Result<Option<SessionRecord>> {
     conn.query_row(
         "SELECT id, cwd, harness, model, model_settings, runtime_mode, title,
-                provider_session_id, blocks_json, created_at, updated_at
+                provider_session_id, blocks_json, created_at, updated_at,
+                context_used, context_window
          FROM sessions
          WHERE id = ?1",
         params![session_id],
@@ -360,6 +383,8 @@ fn get_session(conn: &Connection, session_id: &str) -> rusqlite::Result<Option<S
                 title: row.get(6)?,
                 provider_session_id: row.get(7)?,
                 blocks,
+                context_used: row.get(11)?,
+                context_window: row.get(12)?,
                 created_at: row.get(9)?,
                 updated_at: row.get(10)?,
             })
@@ -402,6 +427,8 @@ mod tests {
             title: title.into(),
             provider_session_id: Some("acp-session-1".into()),
             blocks: json!([{ "id": "b1", "role": "user", "text": "hello" }]),
+            context_used: None,
+            context_window: None,
         }
     }
 
@@ -452,6 +479,43 @@ mod tests {
         assert!(second.updated_at > first.updated_at);
         assert_eq!(second.title, "Updated");
         assert_eq!(second.provider_session_id.as_deref(), Some("acp-session-2"));
+    }
+
+    #[test]
+    fn context_usage_round_trips() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        let mut row = sample("s1", "/tmp/a", "First");
+        row.context_used = Some(29_821);
+        row.context_window = Some(1_000_000);
+        upsert_session(&conn, &row).unwrap();
+        let stored = get_session(&conn, "s1").unwrap().unwrap();
+        assert_eq!(stored.context_used, Some(29_821));
+        assert_eq!(stored.context_window, Some(1_000_000));
+    }
+
+    #[test]
+    fn context_usage_is_absent_until_a_harness_reports() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        upsert_session(&conn, &sample("s1", "/tmp/a", "First")).unwrap();
+        let stored = get_session(&conn, "s1").unwrap().unwrap();
+        assert_eq!(stored.context_used, None);
+        assert_eq!(stored.context_window, None);
+    }
+
+    #[test]
+    fn migration_v3_adds_context_columns() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM schema_migrations WHERE version = 3",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
     }
 
     #[test]

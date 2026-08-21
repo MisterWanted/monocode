@@ -102,3 +102,32 @@ describe("status blocks", () => {
     expect(session.blocks.some((block) => block.role === "system")).toBe(false);
   });
 });
+
+describe("applyHarnessEvent context", () => {
+  it("tracks the newest level instead of summing turns", () => {
+    let session = newSession("claude", "/repo");
+    session = applyHarnessEvent(session, {
+      type: "context",
+      used: 30_000,
+      window: 200_000,
+    });
+    session = applyHarnessEvent(session, { type: "context", used: 55_000 });
+    expect(session.context).toEqual({ used: 55_000, window: 200_000 });
+  });
+
+  it("keeps the level when only a window arrives", () => {
+    let session = newSession("claude", "/repo");
+    session = applyHarnessEvent(session, { type: "context", used: 12_000 });
+    session = applyHarnessEvent(session, { type: "context", window: 400_000 });
+    expect(session.context).toEqual({ used: 12_000, window: 400_000 });
+  });
+
+  it("leaves blocks alone", () => {
+    const session = applyHarnessEvent(newSession("codex", "/repo"), {
+      type: "context",
+      used: 1_000,
+      window: 200_000,
+    });
+    expect(session.blocks).toEqual([]);
+  });
+});

@@ -7,6 +7,7 @@ import {
 import {
   buildOpenCodePermissionRules,
   compareSemver,
+  contextUsedFromMessageInfo,
   inferDefaultAgent,
   inferDefaultVariant,
   isOpenCodeDefaultTitle,
@@ -158,5 +159,64 @@ describe("OpenCode helpers", () => {
     expect(
       inferDefaultAgent([{ name: "plan" }, { name: "build" }]),
     ).toBe("build");
+  });
+});
+
+describe("contextUsedFromMessageInfo", () => {
+  it("counts cache reads and writes alongside input and output", () => {
+    expect(
+      contextUsedFromMessageInfo({
+        role: "assistant",
+        modelID: "big-pickle",
+        providerID: "opencode",
+        tokens: {
+          input: 1_200,
+          output: 800,
+          reasoning: 200,
+          cache: { read: 40_000, write: 5_000 },
+        },
+      }),
+    ).toBe(47_200);
+  });
+
+  it("ignores a message that carries no token block", () => {
+    expect(contextUsedFromMessageInfo({ role: "assistant" })).toBeUndefined();
+    expect(contextUsedFromMessageInfo(null)).toBeUndefined();
+  });
+
+  it("treats an all-zero reading as nothing to report", () => {
+    expect(
+      contextUsedFromMessageInfo({
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      }),
+    ).toBeUndefined();
+  });
+});
+
+describe("flattenOpenCodeModels context window", () => {
+  it("carries limit.context onto the catalog entry", () => {
+    const models = flattenOpenCodeModels(
+      {
+        providers: new Map([
+          [
+            "opencode",
+            {
+              id: "opencode",
+              name: "opencode",
+              models: {
+                "big-pickle": {
+                  id: "big-pickle",
+                  name: "Big Pickle",
+                  limit: { context: 200_000, output: 32_000 },
+                },
+              },
+            },
+          ],
+        ]),
+        connected: ["opencode"],
+      },
+      [],
+    );
+    expect(models[0]?.contextWindow).toBe(200_000);
   });
 });

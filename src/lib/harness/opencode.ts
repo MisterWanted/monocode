@@ -1,4 +1,4 @@
-import { nativeModelId } from "../models";
+import { modelContextWindow, nativeModelId } from "../models";
 import type { RuntimeMode } from "../session";
 import {
   execChild,
@@ -15,6 +15,7 @@ import {
   asRecord,
   buildOpenCodePermissionRules,
   compareSemver,
+  contextUsedFromMessageInfo,
   detailFromToolPart,
   eventSessionId,
   isOpenCodeNotFound,
@@ -408,6 +409,7 @@ function handleEvent(live: Live, event: Record<string, unknown>): void {
       if (id && (role === "user" || role === "assistant")) {
         live.messageRoleById.set(id, role);
       }
+      if (role === "assistant") emitContext(live, info);
       break;
     }
     case "message.removed": {
@@ -515,6 +517,25 @@ function handleEvent(live: Live, event: Record<string, unknown>): void {
     default:
       break;
   }
+}
+
+/**
+ * OpenCode reports tokens per assistant message but not the window, so the
+ * window comes from the catalog entry for the model that produced it.
+ */
+function emitContext(
+  live: Live,
+  info: Record<string, unknown> | null,
+): void {
+  const used = contextUsedFromMessageInfo(info);
+  if (used === undefined) return;
+  const providerID = stringField(info, "providerID");
+  const modelID = stringField(info, "modelID");
+  const window =
+    providerID && modelID
+      ? modelContextWindow(`opencode:${providerID}/${modelID}`)
+      : undefined;
+  live.onEvent({ type: "context", used, ...(window ? { window } : {}) });
 }
 
 function emitAssistantText(live: Live, part: OpenCodePart): void {

@@ -20,6 +20,8 @@ export type AgentModel = {
   name: string;
   nativeId?: string;
   settings?: ModelSetting[];
+  /** Context window, when the harness catalog reports one. */
+  contextWindow?: number;
 };
 
 export const MODELS: AgentModel[] = [
@@ -205,6 +207,12 @@ export function resolveModel(harness: HarnessId, id?: string): AgentModel {
     MODELS.find((model) => model.harness === harness) ??
     MODELS[0]
   );
+}
+
+/** Catalog-reported context window for a model id, when known. */
+export function modelContextWindow(id: string): number | undefined {
+  const window = findModel(id)?.contextWindow;
+  return window && window > 0 ? window : undefined;
 }
 
 export function nativeModelId(model: AgentModel | string): string {

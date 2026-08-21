@@ -12,6 +12,8 @@ import {
   askUserQuestionAllowInput,
   assistantTextBlocks,
   assistantToolUses,
+  contextFromResult,
+  contextUsedFromAssistant,
   buildClaudeSpawnArgs,
   buildClaudeUserMessage,
   buildControlRequest,
@@ -494,6 +496,9 @@ function handleStreamEvent(live: Live, rec: Record<string, unknown>): void {
 function handleAssistant(live: Live, rec: Record<string, unknown>): void {
   if (isSubagentMessage(rec)) return;
 
+  const used = contextUsedFromAssistant(rec);
+  if (used !== undefined) live.onEvent({ type: "context", used });
+
   const snapshot = assistantTextBlocks(rec).join("");
   if (snapshot && snapshot !== live.emittedAssistant) {
     const next = mergeStream(live.emittedAssistant, snapshot);
@@ -545,6 +550,9 @@ function handleUser(live: Live, rec: Record<string, unknown>): void {
 }
 
 function handleResult(live: Live, rec: Record<string, unknown>): void {
+  const context = contextFromResult(rec);
+  if (context) live.onEvent({ type: "context", ...context });
+
   const result = turnStatusFromResult(rec);
   if (result.status === "failed" && result.error && !live.cancelled) {
     live.onEvent({ type: "session.error", message: result.error });

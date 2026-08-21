@@ -148,6 +148,7 @@ import {
   type RuntimeMode,
   type Session,
 } from "./lib/session";
+import { dropContextWindow } from "./lib/contextUsage";
 import {
   deleteSession,
   getSession,
@@ -1817,6 +1818,11 @@ export default function App({
             model: resolved.id,
             modelSettings,
             title: s.blocks.length === 0 ? HARNESS_LABEL[harness] : s.title,
+            // The window belongs to the old model; keep the level and let the
+            // next turn re-report the window rather than showing a stale one.
+            ...(s.model === resolved.id
+              ? {}
+              : { context: dropContextWindow(s.context) }),
             ...(current?.harness === harness
               ? {}
               : { providerSessionId: undefined }),

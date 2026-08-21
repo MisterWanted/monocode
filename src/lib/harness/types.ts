@@ -40,7 +40,9 @@ export type HarnessEvent =
       requestId: number;
       decision: "allow" | "deny";
     }
-  | { type: "plan"; text: string };
+  | { type: "plan"; text: string }
+  /** Context-window level after the harness's latest request. */
+  | { type: "context"; used?: number; window?: number };
 
 export type ApprovalDecision = "allow" | "deny";
 
