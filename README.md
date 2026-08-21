@@ -18,10 +18,10 @@ Works with your subscriptions on Claude Code, Codex, Cursor, and OpenCode. If th
 
 > Install and log in to at least one provider first:
 >
-> - [Claude Code](https://claude.com/product/claude-code) — `claude auth login`
-> - [Codex](https://developers.openai.com/codex/cli) — `codex login`
-> - [Cursor CLI](https://cursor.com/cli) — `agent login`
-> - [OpenCode](https://opencode.ai) — `opencode auth login`
+> - [Claude Code](https://claude.com/product/claude-code) - `claude auth login`
+> - [Codex](https://developers.openai.com/codex/cli) - `codex login`
+> - [Cursor CLI](https://cursor.com/cli) - `agent login`
+> - [OpenCode](https://opencode.ai) - `opencode auth login`
 
 macOS (Apple Silicon): download [MonoCode.dmg](https://dl.usemono.dev/MonoCode.dmg), open it, drag MonoCode to Applications.
 
@@ -29,7 +29,7 @@ macOS (Apple Silicon): download [MonoCode.dmg](https://dl.usemono.dev/MonoCode.d
 
 This is very early and you should expect bugs.
 
-Small, focused pull requests are welcome. Anything large is worth an issue first — see [CONTRIBUTING.md](CONTRIBUTING.md).
+Small, focused pull requests are welcome. Anything large is worth an issue first - see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Build from source
 
@@ -44,4 +44,4 @@ npm run tauri dev
 
 ## License
 
-[MIT](LICENSE). Provider names and logos are trademarks of their owners — see [NOTICE](NOTICE).
+[MIT](LICENSE). Provider names and logos are trademarks of their owners - see [NOTICE](NOTICE).
