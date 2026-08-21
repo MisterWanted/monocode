@@ -25,6 +25,7 @@
     "@codemirror/lang-markdown": "^6.5.2",
     "@codemirror/lang-python": "^6.2.1",
     "@codemirror/lang-rust": "^6.0.2",
+    "@codemirror/lint": "^6.9.7",
     "@codemirror/merge": "^6.12.2",
     "@codemirror/search": "^6.5.11",
     "@lezer/highlight": "^1.2.3",

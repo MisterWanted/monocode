@@ -263,6 +263,11 @@ export default function App({
   const [dirtyFiles, setDirtyFiles] = useState<Set<string>>(
     () => new Set(windowTransfer?.dirtyFileIds ?? []),
   );
+  // Not carried across a window transfer the way dirty state is: the editor
+  // re-lints whatever it mounts, so the counts rebuild themselves.
+  const [fileErrorCounts, setFileErrorCounts] = useState<Map<string, number>>(
+    () => new Map(),
+  );
   const [history, setHistory] = useState<SessionSummary[]>([]);
   const [historyStatus, setHistoryStatus] = useState<
     "idle" | "loading" | "error"
@@ -1777,6 +1782,20 @@ export default function App({
     });
   }, []);
 
+  /** The editor reports 0 as it unmounts, so closed tabs drop out on their own. */
+  const onFileErrorCountChange = useCallback(
+    (fileId: string, count: number) => {
+      setFileErrorCounts((prev) => {
+        if ((prev.get(fileId) ?? 0) === count) return prev;
+        const next = new Map(prev);
+        if (count > 0) next.set(fileId, count);
+        else next.delete(fileId);
+        return next;
+      });
+    },
+    [],
+  );
+
   const onSelectFileSurface = useCallback((paneId: string, fileId: string) => {
     setTabs((prev) =>
       prev.map((tab) => {
@@ -2338,6 +2357,7 @@ export default function App({
                     ...(tab.terminalPanes ?? []),
                   ]}
                   dirtyFileIds={dirtyFiles}
+                  fileErrorCounts={fileErrorCounts}
                   focusedId={
                     tab.id === activeTabId && !tab.diffFocused
                       ? tab.focusedId
@@ -2351,6 +2371,7 @@ export default function App({
                   onCloseFile={onCloseFile}
                   onReorderFiles={onReorderFiles}
                   onFileDirtyChange={onFileDirtyChange}
+                  onFileErrorCountChange={onFileErrorCountChange}
                   onRatio={(splitId, index, ratio) =>
                     onRatio(tab.id, splitId, index, ratio)
                   }

@@ -23,11 +23,13 @@ type Props = {
   pane: EditorPane;
   focused: boolean;
   dirtyFileIds: Set<string>;
+  fileErrorCounts: Map<string, number>;
   sessions: Session[];
   onFocus: (paneId: string) => void;
   onSelectFile: (paneId: string, fileId: string) => void;
   onCloseFile: (paneId: string, fileId: string) => void;
   onDirtyChange: (fileId: string, dirty: boolean) => void;
+  onErrorCountChange: (fileId: string, count: number) => void;
   onReorderFiles: (paneId: string, ids: string[]) => void;
   onOpenFile: (path: string) => void;
   editorNavigation?: EditorNavigationTarget | null;
@@ -39,11 +41,13 @@ function FilePaneComponent({
   pane,
   focused,
   dirtyFileIds,
+  fileErrorCounts,
   sessions,
   onFocus,
   onSelectFile,
   onCloseFile,
   onDirtyChange,
+  onErrorCountChange,
   onReorderFiles,
   onOpenFile,
   editorNavigation,
@@ -59,6 +63,7 @@ function FilePaneComponent({
         files={pane.files}
         activeFileId={pane.activeFileId}
         dirtyFileIds={dirtyFileIds}
+        fileErrorCounts={fileErrorCounts}
         onSelectFile={(fileId) => onSelectFile(pane.id, fileId)}
         onCloseFile={(fileId) => onCloseFile(pane.id, fileId)}
         onReorder={(ids) => onReorderFiles(pane.id, ids)}
@@ -101,6 +106,9 @@ function FilePaneComponent({
                     : null
                 }
                 onDirtyChange={(_path, dirty) => onDirtyChange(file.id, dirty)}
+                onErrorCountChange={(_path, count) =>
+                  onErrorCountChange(file.id, count)
+                }
                 onOpenFile={onOpenFile}
               />
             )}
@@ -116,10 +124,12 @@ export const FilePane = memo(FilePaneComponent, (previous, next) => {
     previous.pane !== next.pane ||
     previous.focused !== next.focused ||
     previous.dirtyFileIds !== next.dirtyFileIds ||
+    previous.fileErrorCounts !== next.fileErrorCounts ||
     previous.onFocus !== next.onFocus ||
     previous.onSelectFile !== next.onSelectFile ||
     previous.onCloseFile !== next.onCloseFile ||
     previous.onDirtyChange !== next.onDirtyChange ||
+    previous.onErrorCountChange !== next.onErrorCountChange ||
     previous.onReorderFiles !== next.onReorderFiles ||
     previous.onOpenFile !== next.onOpenFile ||
     previous.editorNavigation !== next.editorNavigation ||

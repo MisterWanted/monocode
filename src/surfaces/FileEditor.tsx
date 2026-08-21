@@ -64,6 +64,7 @@ import {
   editorGit,
   setGitOriginal,
 } from "./editorGit";
+import { editorLint } from "./editorLint";
 import { editorSearch } from "./editorSearch";
 
 type EditorNavigationRequest = EditorNavigation & { token: number };
@@ -75,6 +76,7 @@ type Props = {
   showDiff?: boolean;
   navigation?: EditorNavigationRequest | null;
   onDirtyChange: (path: string, dirty: boolean) => void;
+  onErrorCountChange?: (path: string, count: number) => void;
   onOpenFile?: (path: string) => void;
 };
 
@@ -94,6 +96,7 @@ export function FileEditor({
   showDiff = false,
   navigation,
   onDirtyChange,
+  onErrorCountChange,
   onOpenFile,
 }: Props) {
   const [loadState, setLoadState] = useState<LoadState>({ status: "loading" });
@@ -275,6 +278,11 @@ export function FileEditor({
     [onDirtyChange, path, reloadFromDisk],
   );
 
+  const errorCountChange = useCallback(
+    (count: number) => onErrorCountChange?.(path, count),
+    [onErrorCountChange, path],
+  );
+
   const relativePath = path.startsWith(`${cwd}/`)
     ? path.slice(cwd.length + 1)
     : path;
@@ -331,6 +339,7 @@ export function FileEditor({
                 active={active && mode === "source"}
                 navigation={navigation}
                 onDirtyChange={dirtyChange}
+                onErrorCountChange={errorCountChange}
                 onSave={save}
                 onDocChange={setDraft}
               />
@@ -347,6 +356,7 @@ export function FileEditor({
           active={active}
           navigation={navigation}
           onDirtyChange={dirtyChange}
+          onErrorCountChange={errorCountChange}
           onSave={save}
         />
       )}
@@ -379,6 +389,7 @@ function CodeMirrorEditor({
   active,
   navigation,
   onDirtyChange,
+  onErrorCountChange,
   onSave,
   onDocChange,
 }: {
@@ -389,6 +400,7 @@ function CodeMirrorEditor({
   active: boolean;
   navigation?: EditorNavigationRequest | null;
   onDirtyChange: (dirty: boolean) => void;
+  onErrorCountChange: (count: number) => void;
   onSave: (content: string) => Promise<void>;
   onDocChange?: (content: string) => void;
 }) {
@@ -398,6 +410,7 @@ function CodeMirrorEditor({
   const dirtyRef = useRef(false);
   const activeRef = useRef(active);
   const onDirtyChangeRef = useRef(onDirtyChange);
+  const onErrorCountChangeRef = useRef(onErrorCountChange);
   const onSaveRef = useRef(onSave);
   const onDocChangeRef = useRef(onDocChange);
   const valueRef = useRef(value);
@@ -412,6 +425,7 @@ function CodeMirrorEditor({
   } | null>(null);
   activeRef.current = active;
   onDirtyChangeRef.current = onDirtyChange;
+  onErrorCountChangeRef.current = onErrorCountChange;
   onSaveRef.current = onSave;
   onDocChangeRef.current = onDocChange;
   valueRef.current = value;
@@ -549,6 +563,7 @@ function CodeMirrorEditor({
         editorMatching,
         editorTyping(path),
         editorAutocomplete,
+        editorLint(path, (count) => onErrorCountChangeRef.current(count)),
         editorSearch,
         syntaxHighlighting(editorHighlightStyle),
         Prec.high(
@@ -610,6 +625,7 @@ function CodeMirrorEditor({
 
     return () => {
       disposed = true;
+      onErrorCountChangeRef.current(0);
       lockOverscroll(null);
       viewRef.current = null;
       savedDocumentRef.current = null;

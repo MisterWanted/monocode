@@ -35,6 +35,7 @@ type Shared = {
   sessions: Session[];
   editorPanes: EditorPane[];
   dirtyFileIds: Set<string>;
+  fileErrorCounts: Map<string, number>;
   focusedId: string;
   composerFocused: boolean;
   recents: RecentProject[];
@@ -44,6 +45,7 @@ type Shared = {
   onCloseFile: (paneId: string, fileId: string) => void;
   onReorderFiles: (paneId: string, ids: string[]) => void;
   onFileDirtyChange: (fileId: string, dirty: boolean) => void;
+  onFileErrorCountChange: (fileId: string, count: number) => void;
   onRatio: (splitId: string, index: number, ratio: number) => void;
   onCwdChange: (sessionId: string, cwd: string) => void;
   onModelChange: (sessionId: string, harness: HarnessId, model: string) => void;
@@ -99,6 +101,7 @@ function PaneTreeComponent({
   sessions,
   editorPanes,
   dirtyFileIds,
+  fileErrorCounts,
   focusedId,
   composerFocused,
   recents,
@@ -108,6 +111,7 @@ function PaneTreeComponent({
   onCloseFile,
   onReorderFiles,
   onFileDirtyChange,
+  onFileErrorCountChange,
   onRatio,
   onCwdChange,
   onModelChange,
@@ -251,12 +255,14 @@ function PaneTreeComponent({
                 pane={editorPane}
                 focused={focusedId === editorPane.id}
                 dirtyFileIds={dirtyFileIds}
+                fileErrorCounts={fileErrorCounts}
                 sessions={sessions}
                 onFocus={onFocus}
                 onSelectFile={onSelectFile}
                 onCloseFile={onCloseFile}
                 onReorderFiles={onReorderFiles}
                 onDirtyChange={onFileDirtyChange}
+                onErrorCountChange={onFileErrorCountChange}
                 onOpenFile={onOpenFile}
                 editorNavigation={editorNavigation}
                 onPaneDragStart={onPaneDragStart}

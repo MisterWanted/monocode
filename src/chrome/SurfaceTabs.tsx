@@ -11,16 +11,24 @@ type Props = {
   files: FilePaneTab[];
   activeFileId: string;
   dirtyFileIds: Set<string>;
+  fileErrorCounts: Map<string, number>;
   onSelectFile: (fileId: string) => void;
   onCloseFile: (fileId: string) => void;
   onReorder: (ids: string[]) => void;
   onPaneDragStart?: (event: ReactPointerEvent<HTMLElement>) => void;
 };
 
+/** Mirrors the VS Code tab tooltip: the path, then what is wrong with it. */
+export function appendProblems(title: string, errors: number): string {
+  if (!errors) return title;
+  return `${title} — ${errors} ${errors === 1 ? "problem" : "problems"}`;
+}
+
 export function SurfaceTabs({
   files,
   activeFileId,
   dirtyFileIds,
+  fileErrorCounts,
   onSelectFile,
   onCloseFile,
   onReorder,
@@ -58,6 +66,7 @@ export function SurfaceTabs({
       {files.map((file, index) => {
         const active = file.id === activeFileId;
         const dirty = dirtyFileIds.has(file.id);
+        const errors = fileErrorCounts.get(file.id) ?? 0;
         const review = isReviewTab(file);
         const terminal = isTerminalTab(file);
         const name = isPlanTab(file)
@@ -108,15 +117,16 @@ export function SurfaceTabs({
               type="button"
               role="tab"
               aria-selected={active}
-              title={
+              title={appendProblems(
                 isPlanTab(file)
                   ? name
                   : terminal
                     ? `${name} — ${file.cwd}`
                     : review
                       ? `${file.path} (Working Tree)`
-                      : file.path
-              }
+                      : file.path,
+                errors,
+              )}
               onClick={() => {
                 if (sortable.consumeClick()) return;
                 onSelectFile(file.id);
@@ -132,7 +142,15 @@ export function SurfaceTabs({
               ) : (
                 <FileTypeIcon name={iconName} isDir={false} size={15} />
               )}
-              <span className={`min-w-0 flex-1 truncate ${review ? "italic" : ""}`}>
+              <span
+                className={`min-w-0 flex-1 truncate ${review ? "italic" : ""} ${
+                  errors
+                    ? active
+                      ? "text-red-400"
+                      : "text-red-400/75 group-hover:text-red-400"
+                    : ""
+                }`}
+              >
                 {label}
               </span>
               {dirty ? (
