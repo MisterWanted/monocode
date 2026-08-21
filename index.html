@@ -23,6 +23,9 @@
             var o = Math.max(0.15, Math.min(1, Number(opacity) || 0.85));
             root.style.setProperty("--sidebar-opacity", String(o));
           }
+          if (localStorage.getItem("monocode.colorScheme") === "light") {
+            root.classList.add("theme-light");
+          }
           var bodyGlass = localStorage.getItem("monocode.bodyGlass");
           if (bodyGlass == null || bodyGlass === "1" || bodyGlass === "true") {
             root.classList.add("glass-body");

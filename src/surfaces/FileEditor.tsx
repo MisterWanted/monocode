@@ -5,7 +5,6 @@ import {
   foldKeymap,
   getIndentUnit,
   indentUnit,
-  syntaxHighlighting,
 } from "@codemirror/language";
 import {
   Annotation,
@@ -47,12 +46,10 @@ import { syncWatchedMtime, watchFile } from "../lib/fileWatch";
 import { displayPath } from "../lib/paths";
 import type { EditorNavigation } from "../lib/search";
 import { useLockOverscroll } from "../lib/useLockOverscroll";
+import { isLightScheme } from "../lib/appearance";
+import { useColorScheme } from "../lib/useColorScheme";
 import { MarkdownPreview } from "./AgentMarkdown";
-import {
-  editorHighlightStyle,
-  editorTheme,
-  languageForPath,
-} from "./editorChrome";
+import { languageForPath, schemeExtensions } from "./editorChrome";
 import { editorAutocomplete } from "./editorAutocomplete";
 import { editorMatching, editorTyping, tryExpandEmmet } from "./editorEditing";
 import {
@@ -68,6 +65,8 @@ import { editorLint } from "./editorLint";
 import { editorSearch } from "./editorSearch";
 
 type EditorNavigationRequest = EditorNavigation & { token: number };
+
+const editorScheme = new Compartment();
 
 type Props = {
   path: string;
@@ -417,6 +416,7 @@ function CodeMirrorEditor({
   const gitOriginalRef = useRef(gitOriginal);
   const chunkNavPinnedRef = useRef<number | null>(null);
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
+  const colorScheme = useColorScheme();
   const [chunkNav, setChunkNav] = useState<{
     positions: number[];
     index: number;
@@ -559,13 +559,12 @@ function CodeMirrorEditor({
         EditorView.lineWrapping,
         wrappedLineIndent,
         language.of([]),
-        editorTheme,
+        editorScheme.of(schemeExtensions(isLightScheme() ? "light" : "dark")),
         editorMatching,
         editorTyping(path),
         editorAutocomplete,
         editorLint(path, (count) => onErrorCountChangeRef.current(count)),
         editorSearch,
-        syntaxHighlighting(editorHighlightStyle),
         Prec.high(
           keymap.of([
             ...foldKeymap,
@@ -633,6 +632,14 @@ function CodeMirrorEditor({
       view.destroy();
     };
   }, [lockOverscroll, path, showDiff, syncChunkNav]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: editorScheme.reconfigure(schemeExtensions(colorScheme)),
+    });
+  }, [colorScheme]);
 
   useEffect(() => {
     const view = viewRef.current;

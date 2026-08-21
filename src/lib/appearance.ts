@@ -6,7 +6,15 @@ const OPACITY_KEY = "monocode.sidebarOpacity";
 const BLUR_KEY = "monocode.sidebarBlur";
 const OPEN_KEY = "monocode.sidebarOpen";
 const BODY_KEY = "monocode.bodyGlass";
+const SCHEME_KEY = "monocode.colorScheme";
 const SIDEBAR_TAB_ORDER_KEY = "monocode.sidebarTabOrder";
+
+export type ColorScheme = "dark" | "light";
+
+export const COLOR_SCHEME_DEFAULT: ColorScheme = "dark";
+
+/** Fired on `window` whenever the color scheme flips (detail: ColorScheme). */
+export const SCHEME_CHANGE_EVENT = "monocode:schemechange";
 
 export type SidebarTabId = "files" | "sessions";
 
@@ -122,9 +130,39 @@ export function applyThemeTint(hue: number, saturation: number) {
 
 export function initAppearance() {
   applyThemeTint(loadThemeHue(), loadThemeSaturation());
+  applyColorScheme(loadColorScheme());
   applySidebarOpacity(loadSidebarOpacity());
   applySidebarBlur(loadSidebarBlur());
   applyBodyGlass(loadBodyGlass());
+}
+
+export function loadColorScheme(): ColorScheme {
+  try {
+    return localStorage.getItem(SCHEME_KEY) === "light" ? "light" : "dark";
+  } catch {
+    return COLOR_SCHEME_DEFAULT;
+  }
+}
+
+export function saveColorScheme(value: ColorScheme) {
+  try {
+    localStorage.setItem(SCHEME_KEY, value);
+  } catch {
+    // private mode / quota
+  }
+}
+
+export function isLightScheme(): boolean {
+  return document.documentElement.classList.contains("theme-light");
+}
+
+export function applyColorScheme(value: ColorScheme): ColorScheme {
+  const next = value === "light" ? "light" : "dark";
+  document.documentElement.classList.toggle("theme-light", next === "light");
+  window.dispatchEvent(
+    new CustomEvent<ColorScheme>(SCHEME_CHANGE_EVENT, { detail: next }),
+  );
+  return next;
 }
 
 export function loadSidebarOpacity(): number {

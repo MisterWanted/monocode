@@ -23,13 +23,18 @@ import type { PluggableList } from "unified";
 import { FileTypeIcon } from "../chrome/FileTypeIcon";
 import { resolveWorkspacePath } from "../lib/paths";
 import { useLockOverscroll } from "../lib/useLockOverscroll";
+import { useColorScheme } from "../lib/useColorScheme";
+
+const MERMAID_BASE_CONFIG = {
+  startOnLoad: false,
+  securityLevel: "strict",
+  suppressErrorRendering: true,
+} as const;
 
 const mermaid = createMermaidPlugin({
   config: {
-    startOnLoad: false,
+    ...MERMAID_BASE_CONFIG,
     theme: "dark",
-    securityLevel: "strict",
-    suppressErrorRendering: true,
   },
 });
 
@@ -314,6 +319,7 @@ function MermaidBlock({
 }) {
   const [svg, setSvg] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+  const colorScheme = useColorScheme();
 
   useEffect(() => {
     if (incomplete) {
@@ -326,7 +332,10 @@ function MermaidBlock({
     setFailed(false);
     const id = `mermaid-${Math.abs(hashCode(code)).toString(36)}-${Date.now().toString(36)}`;
     void mermaid
-      .getMermaid()
+      .getMermaid({
+        ...MERMAID_BASE_CONFIG,
+        theme: colorScheme === "light" ? "default" : "dark",
+      })
       .render(id, code)
       .then((result) => {
         if (cancelled) return;
@@ -338,7 +347,7 @@ function MermaidBlock({
     return () => {
       cancelled = true;
     };
-  }, [code, incomplete]);
+  }, [code, incomplete, colorScheme]);
 
   if (incomplete || failed) {
     return (

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Light mode: toggle Dark/Light in the appearance panel. Terminal, editor, markdown (including Mermaid), and sidebar all follow the scheme; preference persists across restarts.
 - Editor syntax linting for supported source files (JavaScript, TypeScript, JSON, CSS, HTML, Rust, and Python): lightweight diagnostics straight from the Lezer parse tree, with wavy red underlines and hover tooltips. Catches unclosed brackets, stray quotes, and other typo-class mistakes — not a type checker or language server.
 - File tabs show syntax problems: the label turns red and the tooltip appends a problem count, similar to VS Code.
 - Context meter in the composer: a ring showing how much of the model context window the session is using, with exact token counts on hover. It turns amber at 75% and red at 90%.

@@ -14,6 +14,7 @@ import {
   scanOscCwd,
   type TerminalMetaPatch,
 } from "../lib/terminalTab";
+import { isLightScheme, SCHEME_CHANGE_EVENT } from "../lib/appearance";
 import {
   applyTerminalChrome,
   fitTerminal,
@@ -40,30 +41,58 @@ function cssColor(expr: string, fallback: string): string {
   return color || fallback;
 }
 
-function terminalTheme() {
+const ANSI_DARK = {
+  black: "#1d2428",
+  red: "#f87171",
+  green: "#4ade80",
+  yellow: "#fbbf24",
+  blue: "#60a5fa",
+  magenta: "#c084fc",
+  cyan: "#22d3ee",
+  white: "#e8eef2",
+  brightBlack: "#64748b",
+  brightRed: "#fca5a5",
+  brightGreen: "#86efac",
+  brightYellow: "#fde68a",
+  brightBlue: "#93c5fd",
+  brightMagenta: "#d8b4fe",
+  brightCyan: "#67e8f9",
+  brightWhite: "#f8fafc",
+};
+
+// One-Light-family palette tuned for a near-white canvas.
+const ANSI_LIGHT = {
+  black: "#383a42",
+  red: "#e45649",
+  green: "#50a14f",
+  yellow: "#c18401",
+  blue: "#4078f2",
+  magenta: "#a626a4",
+  cyan: "#0184bc",
+  white: "#fafafa",
+  brightBlack: "#7c8591",
+  brightRed: "#df6b60",
+  brightGreen: "#68b567",
+  brightYellow: "#d19a2f",
+  brightBlue: "#5c89f5",
+  brightMagenta: "#b54bb3",
+  brightCyan: "#1f9cc9",
+  brightWhite: "#ffffff",
+};
+
+function terminalTheme(light: boolean) {
   return {
     background: "#00000000",
-    foreground: cssColor("var(--color-content)", "#e8eef2"),
-    cursor: cssColor("var(--color-accent)", "#4da3f5"),
-    cursorAccent: "#000000",
-    selectionBackground: "rgba(255,255,255,0.18)",
-    selectionInactiveBackground: "rgba(255,255,255,0.08)",
-    black: "#1d2428",
-    red: "#f87171",
-    green: "#4ade80",
-    yellow: "#fbbf24",
-    blue: "#60a5fa",
-    magenta: "#c084fc",
-    cyan: "#22d3ee",
-    white: "#e8eef2",
-    brightBlack: "#64748b",
-    brightRed: "#fca5a5",
-    brightGreen: "#86efac",
-    brightYellow: "#fde68a",
-    brightBlue: "#93c5fd",
-    brightMagenta: "#d8b4fe",
-    brightCyan: "#67e8f9",
-    brightWhite: "#f8fafc",
+    foreground: cssColor("var(--color-content)", light ? "#2e2e2e" : "#e8eef2"),
+    cursor: cssColor("var(--color-accent)", light ? "#4078f2" : "#4da3f5"),
+    cursorAccent: light ? "#ffffff" : "#000000",
+    selectionBackground: light
+      ? "rgba(0,0,0,0.18)"
+      : "rgba(255,255,255,0.18)",
+    selectionInactiveBackground: light
+      ? "rgba(0,0,0,0.08)"
+      : "rgba(255,255,255,0.08)",
+    ...(light ? ANSI_LIGHT : ANSI_DARK),
   };
 }
 
@@ -74,9 +103,13 @@ function monoFont(): string {
   return fromCss || "ui-monospace, SFMono-Regular, Menlo, Monaco, monospace";
 }
 
-const OSC_FG = "#e8eef2";
-const OSC_BG = "#141b1f";
-const OSC_CURSOR = "#4da3f5";
+// OSC 10/11/12 replies so CLIs (vim, tmux, …) pick matching colors.
+const OSC_DARK = { fg: "#e8eef2", bg: "#141b1f", cursor: "#4da3f5" };
+const OSC_LIGHT = { fg: "#383a42", bg: "#fafafa", cursor: "#4078f2" };
+
+function oscColors() {
+  return isLightScheme() ? OSC_LIGHT : OSC_DARK;
+}
 
 export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
   const outerRef = useRef<HTMLDivElement>(null);
@@ -103,7 +136,7 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
       scrollback: 5000,
       allowTransparency: true,
       smoothScrollDuration: 0,
-      theme: terminalTheme(),
+      theme: terminalTheme(isLightScheme()),
       macOptionIsMeta: IS_MAC,
     });
     term.open(host);
@@ -175,14 +208,19 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
       return true;
     };
     const oscFg = term.parser.registerOscHandler(10, (data) =>
-      isOscColorQuery(data) ? replyOsc(10, OSC_FG) : false,
+      isOscColorQuery(data) ? replyOsc(10, oscColors().fg) : false,
     );
     const oscBg = term.parser.registerOscHandler(11, (data) =>
-      isOscColorQuery(data) ? replyOsc(11, OSC_BG) : false,
+      isOscColorQuery(data) ? replyOsc(11, oscColors().bg) : false,
     );
     const oscCursor = term.parser.registerOscHandler(12, (data) =>
-      isOscColorQuery(data) ? replyOsc(12, OSC_CURSOR) : false,
+      isOscColorQuery(data) ? replyOsc(12, oscColors().cursor) : false,
     );
+
+    const onSchemeChange = () => {
+      term.options.theme = terminalTheme(isLightScheme());
+    };
+    window.addEventListener(SCHEME_CHANGE_EVENT, onSchemeChange);
 
     term.attachCustomWheelEventHandler(() => {
       if (term.element?.classList.contains("enable-mouse-events")) return true;
@@ -257,6 +295,7 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
       applySizeRef.current = () => {};
       host.removeEventListener("copy", onCopy);
       host.removeEventListener("paste", onPaste);
+      window.removeEventListener(SCHEME_CHANGE_EVENT, onSchemeChange);
       dataSub.dispose();
       oscFg.dispose();
       oscBg.dispose();

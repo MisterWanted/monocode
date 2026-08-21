@@ -1,11 +1,17 @@
-import { HighlightStyle, LanguageSupport } from "@codemirror/language";
+import {
+  HighlightStyle,
+  LanguageSupport,
+  syntaxHighlighting,
+} from "@codemirror/language";
 import type { Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import { cspStyleNonce } from "../lib/csp";
 import { basename } from "../lib/fs";
+import type { ColorScheme } from "../lib/appearance";
 
-const editorThemeStyles = EditorView.theme(
+function editorThemeStyles(dark: boolean) {
+  return EditorView.theme(
   {
     "&": {
       height: "100%",
@@ -112,9 +118,8 @@ const editorThemeStyles = EditorView.theme(
       fontStyle: "normal",
       marginLeft: "8px",
     },
-  },
-  { dark: true },
-);
+  }, { dark });
+}
 
 /**
  * The theme, plus whatever CSP nonce its style sheet needs. CodeMirror mounts
@@ -122,81 +127,92 @@ const editorThemeStyles = EditorView.theme(
  * style-src that rejects inline sheets leaves the editor completely unstyled.
  * See `cspStyleNonce` for why this is currently a no-op.
  */
-export const editorTheme: Extension = [
-  editorThemeStyles,
-  EditorView.cspNonce.of(cspStyleNonce()),
-];
+export function editorThemeFor(scheme: ColorScheme): Extension {
+  return [
+    editorThemeStyles(scheme === "dark"),
+    EditorView.cspNonce.of(cspStyleNonce()),
+  ];
+}
 
-export const editorHighlightStyle = HighlightStyle.define([
-  {
-    tag: [
-      tags.keyword,
-      tags.controlKeyword,
-      tags.definitionKeyword,
-      tags.moduleKeyword,
-      tags.operatorKeyword,
-      tags.modifier,
-      tags.self,
-      tags.bool,
-      tags.null,
-      tags.atom,
-      tags.unit,
-    ],
-    color: "#ff8ffd",
-  },
-  {
-    tag: [
-      tags.function(tags.variableName),
-      tags.function(tags.propertyName),
-      tags.labelName,
-      tags.macroName,
-    ],
-    color: "#a5d5fe",
-  },
-  {
-    tag: [
-      tags.string,
-      tags.docString,
-      tags.character,
-      tags.attributeValue,
-      tags.special(tags.string),
-      tags.regexp,
-      tags.escape,
-    ],
-    color: "#b4fa72",
-  },
-  {
-    tag: [
-      tags.typeName,
-      tags.className,
-      tags.namespace,
-      tags.tagName,
-      tags.standard(tags.typeName),
-    ],
-    color: "#ff8272",
-  },
-  {
-    tag: [tags.number, tags.integer, tags.float],
-    color: "#b4fa72",
-  },
-  {
-    tag: [tags.comment, tags.lineComment, tags.blockComment, tags.docComment],
-    color: "#fefdc2",
-  },
-  {
-    tag: [tags.propertyName, tags.attributeName],
-    color: "#d0d1fe",
-  },
-  {
-    tag: [tags.meta, tags.processingInstruction, tags.annotation],
-    color: "#8e8e8e",
-  },
-  {
-    tag: tags.invalid,
-    color: "#ffc4bd",
-    textDecoration: "underline",
-  },
+const HIGHLIGHT_TAGS = {
+  keyword: [
+    tags.keyword,
+    tags.controlKeyword,
+    tags.definitionKeyword,
+    tags.moduleKeyword,
+    tags.operatorKeyword,
+    tags.modifier,
+    tags.self,
+    tags.bool,
+    tags.null,
+    tags.atom,
+    tags.unit,
+  ],
+  callable: [
+    tags.function(tags.variableName),
+    tags.function(tags.propertyName),
+    tags.labelName,
+    tags.macroName,
+  ],
+  string: [
+    tags.string,
+    tags.docString,
+    tags.character,
+    tags.attributeValue,
+    tags.special(tags.string),
+    tags.regexp,
+    tags.escape,
+  ],
+  type: [
+    tags.typeName,
+    tags.className,
+    tags.namespace,
+    tags.tagName,
+    tags.standard(tags.typeName),
+  ],
+  number: [tags.number, tags.integer, tags.float],
+  comment: [tags.comment, tags.lineComment, tags.blockComment, tags.docComment],
+  property: [tags.propertyName, tags.attributeName],
+  meta: [tags.meta, tags.processingInstruction, tags.annotation],
+};
+
+// Pastel-on-dark palette.
+const HIGHLIGHT_DARK = HighlightStyle.define([
+  { tag: HIGHLIGHT_TAGS.keyword, color: "#ff8ffd" },
+  { tag: HIGHLIGHT_TAGS.callable, color: "#a5d5fe" },
+  { tag: HIGHLIGHT_TAGS.string, color: "#b4fa72" },
+  { tag: HIGHLIGHT_TAGS.type, color: "#ff8272" },
+  { tag: HIGHLIGHT_TAGS.number, color: "#b4fa72" },
+  { tag: HIGHLIGHT_TAGS.comment, color: "#fefdc2" },
+  { tag: HIGHLIGHT_TAGS.property, color: "#d0d1fe" },
+  { tag: HIGHLIGHT_TAGS.meta, color: "#8e8e8e" },
+  { tag: tags.invalid, color: "#ffc4bd", textDecoration: "underline" },
 ]);
+
+// One-Light-family palette tuned for a near-white canvas.
+const HIGHLIGHT_LIGHT = HighlightStyle.define([
+  { tag: HIGHLIGHT_TAGS.keyword, color: "#a626a4" },
+  { tag: HIGHLIGHT_TAGS.callable, color: "#4078f2" },
+  { tag: HIGHLIGHT_TAGS.string, color: "#50a14f" },
+  { tag: HIGHLIGHT_TAGS.type, color: "#c18401" },
+  { tag: HIGHLIGHT_TAGS.number, color: "#986801" },
+  { tag: HIGHLIGHT_TAGS.comment, color: "#8a9199" },
+  { tag: HIGHLIGHT_TAGS.property, color: "#e45649" },
+  { tag: HIGHLIGHT_TAGS.meta, color: "#5c6370" },
+  { tag: tags.invalid, color: "#cf222e", textDecoration: "underline" },
+]);
+
+export function editorHighlightStyleFor(scheme: ColorScheme) {
+  return scheme === "light" ? HIGHLIGHT_LIGHT : HIGHLIGHT_DARK;
+}
+
+/** Theme + syntax highlighting for one color scheme; swap via a Compartment. */
+export function schemeExtensions(scheme: ColorScheme): Extension[] {
+  return [
+    editorThemeFor(scheme),
+    syntaxHighlighting(editorHighlightStyleFor(scheme)),
+  ];
+}
 
 export async function languageForPath(path: string): Promise<Extension | null> {
   const name = basename(path).toLowerCase();

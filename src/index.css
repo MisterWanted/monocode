@@ -4,8 +4,12 @@
 @source "../node_modules/@streamdown/mermaid/dist/*.js";
 
 @theme {
-  --color-background-base: hsl(var(--theme-hue) var(--theme-saturation) 9%);
-  --color-content: hsl(var(--theme-hue) var(--theme-saturation) 92%);
+  --color-background-base: hsl(
+    var(--theme-hue) var(--theme-saturation) var(--background-lightness)
+  );
+  --color-content: hsl(
+    var(--theme-hue) var(--theme-saturation) var(--content-lightness)
+  );
   --color-accent: hsl(211 92% 62%);
   --font-mono:
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
@@ -16,6 +20,20 @@
   --theme-hue: 240;
   --theme-saturation: 0%;
   --sidebar-opacity: 0.85;
+  --background-lightness: 9%;
+  --content-lightness: 92%;
+  --link-color: #7dd3fc;
+}
+
+html {
+  color-scheme: dark;
+}
+
+html.theme-light {
+  --background-lightness: 97%;
+  --content-lightness: 18%;
+  --link-color: hsl(211 92% 40%);
+  color-scheme: light;
 }
 
 html,
@@ -28,7 +46,6 @@ body,
   margin: 0;
   background: transparent;
   color: var(--color-content);
-  color-scheme: dark;
   overflow: hidden;
   overscroll-behavior: none;
   user-select: none;
@@ -36,7 +53,8 @@ body,
 
 .sidebar-glass {
   background: hsl(
-    var(--theme-hue) var(--theme-saturation) 9% / var(--sidebar-opacity)
+    var(--theme-hue) var(--theme-saturation) var(--background-lightness) /
+      var(--sidebar-opacity)
   );
 }
 
@@ -178,7 +196,7 @@ html.is-reordering * {
 }
 
 .agent-markdown .markdown-code-path-link:hover {
-  color: #7dd3fc;
+  color: var(--link-color);
   text-decoration: underline;
 }
 
@@ -332,8 +350,8 @@ html.is-reordering * {
       transparent calc(50% + var(--spread))
     ),
     linear-gradient(
-      hsl(var(--theme-hue) var(--theme-saturation) 92% / 0.4),
-      hsl(var(--theme-hue) var(--theme-saturation) 92% / 0.4)
+      hsl(var(--theme-hue) var(--theme-saturation) var(--content-lightness) / 0.4),
+      hsl(var(--theme-hue) var(--theme-saturation) var(--content-lightness) / 0.4)
     );
   background-size:
     250% 100%,

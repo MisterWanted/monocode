@@ -3,15 +3,18 @@ import { Blend } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
   applyBodyGlass,
+  applyColorScheme,
   applySidebarBlur,
   applySidebarOpacity,
   applyThemeTint,
   loadBodyGlass,
+  loadColorScheme,
   loadSidebarBlur,
   loadSidebarOpacity,
   loadThemeHue,
   loadThemeSaturation,
   saveBodyGlass,
+  saveColorScheme,
   saveSidebarBlur,
   saveSidebarOpacity,
   saveThemeHue,
@@ -24,6 +27,7 @@ import {
   THEME_HUE_MIN,
   THEME_SATURATION_MAX,
   THEME_SATURATION_MIN,
+  type ColorScheme,
 } from "../lib/appearance";
 
 export function OpacityControl() {
@@ -45,6 +49,7 @@ export function OpacityControl() {
   });
   const [themeHue, setThemeHue] = useState(loadThemeHue);
   const [themeSaturation, setThemeSaturation] = useState(loadThemeSaturation);
+  const [colorScheme, setColorScheme] = useState<ColorScheme>(loadColorScheme);
   const root = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -90,6 +95,12 @@ export function OpacityControl() {
     setBodyGlass(next);
   };
 
+  const onColorScheme = (next: ColorScheme) => {
+    applyColorScheme(next);
+    saveColorScheme(next);
+    setColorScheme(next);
+  };
+
   const onThemeHue = (nextHue: number) => {
     const { hue, saturation } = applyThemeTint(nextHue, themeSaturation);
     saveThemeHue(hue);
@@ -129,6 +140,15 @@ export function OpacityControl() {
           data-tauri-drag-region="false"
           className="absolute right-0 top-full z-50 mt-1.5 flex w-72 flex-col gap-3 rounded-lg border border-content/5 bg-content/5 p-3 shadow-xl backdrop-blur-md"
         >
+          <SegmentedRow
+            label="Theme"
+            value={colorScheme}
+            options={[
+              { value: "dark", label: "Dark" },
+              { value: "light", label: "Light" },
+            ]}
+            onChange={onColorScheme}
+          />
           <SliderRow
             label="Opacity"
             value={percent}
@@ -164,6 +184,46 @@ export function OpacityControl() {
           <ToggleRow label="Main pane" on={bodyGlass} onChange={onBodyGlass} />
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function SegmentedRow<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between text-[12px]">
+      <span className="text-content/50">{label}</span>
+      <div
+        role="radiogroup"
+        aria-label={label}
+        className="flex gap-0.5 rounded-md border border-content/10 p-0.5"
+      >
+        {options.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={value === option.value}
+            onClick={() => onChange(option.value)}
+            className={`rounded-[5px] px-2 py-0.5 ${
+              value === option.value
+                ? "bg-content/10 text-content"
+                : "text-content/50 hover:text-content"
+            }`}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
