@@ -65,6 +65,7 @@ import {
   joinTabOnto,
   newTabGroupId,
   removeTabFromGroup,
+  tabGroupProject,
   ungroupTabs,
 } from "./lib/tabGroups";
 import {
@@ -1640,8 +1641,26 @@ export default function App({
     setSessions((prev) =>
       prev.map((s) => (s.id === sessionId ? { ...s, cwd: normalized } : s)),
     );
+    // The session's project just moved in place; a group only holds tabs that
+    // share one project, so drop this tab out if it no longer matches.
+    setTabs((prev) => {
+      const tab = prev.find((t) => leafIds(t.layout).includes(sessionId));
+      // The tab's visible project follows its focused pane; a background
+      // pane changing project doesn't change what the group check should see.
+      if (!tab?.groupId || tab.focusedId !== sessionId) return prev;
+      const newProject = projectName(normalized);
+      const othersProject = tabGroupProject(
+        prev.filter((t) => t.id !== tab.id),
+        tab.groupId,
+        projectOfTab,
+      );
+      if (othersProject && newProject && othersProject !== newProject) {
+        return removeTabFromGroup(prev, tab.id);
+      }
+      return prev;
+    });
     notifyReviewChanged(sessionId);
-  }, [appendTab]);
+  }, [appendTab, projectOfTab]);
 
   const pickProject = useCallback(async () => {
     const path = await pickFolder();
