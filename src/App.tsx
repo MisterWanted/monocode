@@ -161,6 +161,16 @@ import {
 import { syncDockBadge } from "./lib/dockBadge";
 import { hiddenApprovalNotices } from "./lib/approvalToast";
 import { tabCommand } from "./lib/tabKeys";
+import {
+  canTabVisitBack,
+  canTabVisitForward,
+  emptyTabVisitHistory,
+  pruneTabVisitHistory,
+  recordTabVisit,
+  tabVisitBack,
+  tabVisitForward,
+  type TabVisitHistory,
+} from "./lib/tabVisitHistory";
 import { applySkillsToTurn } from "./lib/skills";
 import { killAllPtys } from "./lib/pty";
 import { PaneTree } from "./surfaces/PaneTree";
@@ -279,6 +289,12 @@ export default function App({
   tabsRef.current = tabs;
   const activeTabIdRef = useRef(activeTabId);
   activeTabIdRef.current = activeTabId;
+  const tabVisitRef = useRef(emptyTabVisitHistory(activeTabId));
+  const tabVisitFromHistoryRef = useRef(false);
+  const [tabVisitNav, setTabVisitNav] = useState({
+    canBack: false,
+    canForward: false,
+  });
   const turnGen = useRef(new Map<string, number>());
   const lastPersisted = useRef(new Map<string, string>());
   const observedSessions = useRef(new Map<string, Session>());
@@ -616,6 +632,32 @@ export default function App({
         sessionsRef.current.some((session) => session.id === tab.focusedId),
     );
   }, []);
+
+  const commitTabVisit = useCallback((history: TabVisitHistory) => {
+    tabVisitRef.current = history;
+    const canBack = canTabVisitBack(history);
+    const canForward = canTabVisitForward(history);
+    setTabVisitNav((prev) =>
+      prev.canBack === canBack && prev.canForward === canForward
+        ? prev
+        : { canBack, canForward },
+    );
+  }, []);
+
+  useEffect(() => {
+    const openIds = new Set(tabs.map((tab) => tab.id));
+    let next = pruneTabVisitHistory(
+      tabVisitRef.current,
+      openIds,
+      activeTabId,
+    );
+    if (tabVisitFromHistoryRef.current) {
+      tabVisitFromHistoryRef.current = false;
+    } else if (next.current !== activeTabId) {
+      next = recordTabVisit(next, activeTabId);
+    }
+    commitTabVisit(pruneTabVisitHistory(next, openIds, activeTabId));
+  }, [activeTabId, commitTabVisit, tabs]);
 
   /** `cwd` scopes group inheritance: a tab from another project starts alone. */
   const appendTab = useCallback(
@@ -1174,6 +1216,34 @@ export default function App({
       activateTab(tabs[(index - 1 + tabs.length) % tabs.length].id);
     }
   }, [activateTab, activeTabId, tabs]);
+
+  const onVisitBack = useCallback(() => {
+    const openIds = new Set(tabsRef.current.map((tab) => tab.id));
+    const pruned = pruneTabVisitHistory(
+      tabVisitRef.current,
+      openIds,
+      activeTabIdRef.current,
+    );
+    const next = tabVisitBack(pruned);
+    if (!next || !openIds.has(next.current)) return;
+    tabVisitFromHistoryRef.current = true;
+    commitTabVisit(next);
+    activateTab(next.current);
+  }, [activateTab, commitTabVisit]);
+
+  const onVisitForward = useCallback(() => {
+    const openIds = new Set(tabsRef.current.map((tab) => tab.id));
+    const pruned = pruneTabVisitHistory(
+      tabVisitRef.current,
+      openIds,
+      activeTabIdRef.current,
+    );
+    const next = tabVisitForward(pruned);
+    if (!next || !openIds.has(next.current)) return;
+    tabVisitFromHistoryRef.current = true;
+    commitTabVisit(next);
+    activateTab(next.current);
+  }, [activateTab, commitTabVisit]);
 
   const onActivate = useCallback(
     (slot: number) => {
@@ -2128,6 +2198,8 @@ export default function App({
     onClosePane,
     onNext,
     onPrev,
+    onVisitBack,
+    onVisitForward,
     onActivate,
     onSplit,
     onFocusDir,
@@ -2143,6 +2215,8 @@ export default function App({
     onClosePane,
     onNext,
     onPrev,
+    onVisitBack,
+    onVisitForward,
     onActivate,
     onSplit,
     onFocusDir,
@@ -2172,7 +2246,9 @@ export default function App({
           target?.closest(".monocode-terminal") &&
           e.ctrlKey &&
           !e.metaKey &&
-          /Mac|iPhone|iPad/.test(navigator.platform)
+          (cmd === "back" ||
+            cmd === "forward" ||
+            /Mac|iPhone|iPad/.test(navigator.platform))
         ) {
           return;
         }
@@ -2197,6 +2273,8 @@ export default function App({
         else if (cmd === "close") run("close", a.onClosePane);
         else if (cmd === "next") run("next", a.onNext);
         else if (cmd === "prev") run("prev", a.onPrev);
+        else if (cmd === "back") run("back", a.onVisitBack);
+        else if (cmd === "forward") run("forward", a.onVisitForward);
         else if (cmd === "split-right")
           run("split-right", () => a.onSplit("right"));
         else if (cmd === "split-down")
@@ -2242,6 +2320,8 @@ export default function App({
       listen("close_tab", () => run("close", actions.current.onClosePane)),
       listen("next_tab", () => run("next", actions.current.onNext)),
       listen("prev_tab", () => run("prev", actions.current.onPrev)),
+      listen("back_tab", () => run("back", actions.current.onVisitBack)),
+      listen("forward_tab", () => run("forward", actions.current.onVisitForward)),
       listen("split_right", () =>
         run("split-right", () => actions.current.onSplit("right")),
       ),
@@ -2308,6 +2388,10 @@ export default function App({
         onFileDeleted={onFileDeleted}
         diffOpen={!!activeTab?.diffOpen}
         onToggleDiff={onToggleDiff}
+        canGoBack={tabVisitNav.canBack}
+        canGoForward={tabVisitNav.canForward}
+        onGoBack={onVisitBack}
+        onGoForward={onVisitForward}
       />
 
       <div className="body-glass flex min-h-0 min-w-0 flex-1 flex-col">
@@ -2320,6 +2404,10 @@ export default function App({
           onToggleSidebar={onToggleSidebar}
           onToggleDiff={onToggleDiff}
           onSelect={activateTab}
+          canGoBack={tabVisitNav.canBack}
+          canGoForward={tabVisitNav.canForward}
+          onGoBack={onVisitBack}
+          onGoForward={onVisitForward}
           onNew={onNew}
           onNewTerminal={onNewTerminal}
           onClose={onCloseTab}

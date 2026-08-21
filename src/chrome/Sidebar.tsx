@@ -29,6 +29,7 @@ import { FileTree } from "./FileTree";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { HarnessIcon } from "./HarnessIcon";
 import { TerminalSpinner } from "./TerminalSpinner";
+import { TabVisitNav } from "./TitleBar";
 import { ProjectSearch } from "./ProjectSearch";
 import { ProjectLogoIcon } from "./ProjectLogoIcon";
 import { SidebarUpdate } from "./SidebarUpdate";
@@ -69,6 +70,10 @@ type Props = {
   onFilesSearchOpenChange: (open: boolean) => void;
   onOpenFilesSearch?: () => void;
   searchFocusToken?: number;
+  canGoBack?: boolean;
+  canGoForward?: boolean;
+  onGoBack?: () => void;
+  onGoForward?: () => void;
 };
 
 function SidebarComponent({
@@ -94,6 +99,10 @@ function SidebarComponent({
   onFilesSearchOpenChange,
   onOpenFilesSearch,
   searchFocusToken = 0,
+  canGoBack = false,
+  canGoForward = false,
+  onGoBack,
+  onGoForward,
 }: Props) {
   const [width, setWidth] = useState(rememberedWidth);
   const [dragging, setDragging] = useState(false);
@@ -262,7 +271,18 @@ function SidebarComponent({
         open ? "flex" : "hidden"
       }`}
     >
-      <div className="h-9.75 shrink-0" data-tauri-drag-region />
+      <div
+        className="flex h-9.75 shrink-0 items-center pr-1.5"
+        data-tauri-drag-region
+      >
+        <div className="min-w-0 flex-1" data-tauri-drag-region />
+        <TabVisitNav
+          canGoBack={canGoBack}
+          canGoForward={canGoForward}
+          onGoBack={onGoBack}
+          onGoForward={onGoForward}
+        />
+      </div>
       <div
         role="tablist"
         aria-label="Sidebar"

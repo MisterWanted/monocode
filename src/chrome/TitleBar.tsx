@@ -87,6 +87,10 @@ type Props = {
   onToggleSidebar: () => void;
   onToggleDiff?: () => void;
   onSelect: (id: string) => void;
+  canGoBack?: boolean;
+  canGoForward?: boolean;
+  onGoBack?: () => void;
+  onGoForward?: () => void;
   onNew: () => void;
   onNewTerminal?: () => void;
   onClose: (id: string) => void;
@@ -675,11 +679,13 @@ function TabStripChevron({
 function IconButton({
   label,
   active,
+  disabled,
   onClick,
   children,
 }: {
   label: string;
   active?: boolean;
+  disabled?: boolean;
   onClick?: () => void;
   children: ReactNode;
 }) {
@@ -689,14 +695,53 @@ function IconButton({
       title={label}
       aria-label={label}
       aria-pressed={active}
+      aria-disabled={disabled}
       data-tauri-drag-region="false"
-      onClick={onClick}
-      className={`grid size-6.5 place-items-center rounded-md  hover:bg-content/10 ${
-        active ? "text-content " : "text-content/50 hover:text-content"
+      onClick={() => {
+        if (disabled) return;
+        onClick?.();
+      }}
+      className={`grid size-6.5 place-items-center rounded-md ${
+        disabled
+          ? "text-content/25"
+          : active
+            ? "text-content hover:bg-content/10"
+            : "text-content/50 hover:bg-content/10 hover:text-content"
       }`}
     >
       {children}
     </button>
+  );
+}
+
+export function TabVisitNav({
+  canGoBack = false,
+  canGoForward = false,
+  onGoBack,
+  onGoForward,
+}: {
+  canGoBack?: boolean;
+  canGoForward?: boolean;
+  onGoBack?: () => void;
+  onGoForward?: () => void;
+}) {
+  return (
+    <div className="flex shrink-0 items-center gap-0.5">
+      <IconButton
+        label="Back (⌘[)"
+        disabled={!canGoBack}
+        onClick={onGoBack}
+      >
+        <ChevronLeft className="size-3.5" strokeWidth={1.75} />
+      </IconButton>
+      <IconButton
+        label="Forward (⌘])"
+        disabled={!canGoForward}
+        onClick={onGoForward}
+      >
+        <ChevronRight className="size-3.5" strokeWidth={1.75} />
+      </IconButton>
+    </div>
   );
 }
 
@@ -709,6 +754,10 @@ function TitleBarComponent({
   onToggleSidebar,
   onToggleDiff,
   onSelect,
+  canGoBack = false,
+  canGoForward = false,
+  onGoBack,
+  onGoForward,
   onNew,
   onNewTerminal,
   onClose,
@@ -985,6 +1034,14 @@ function TitleBarComponent({
       )}
 
       <div className="flex shrink-0 items-center gap-0.5 px-2">
+        {sidebarOpen ? null : (
+          <TabVisitNav
+            canGoBack={canGoBack}
+            canGoForward={canGoForward}
+            onGoBack={onGoBack}
+            onGoForward={onGoForward}
+          />
+        )}
         <IconButton
           label="Toggle Sidebar (⌘B)"
           active={sidebarOpen}

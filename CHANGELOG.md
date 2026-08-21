@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-21
+
 ### Added
 
 - Light mode: toggle Dark/Light in the appearance panel. Terminal, editor, markdown (including Mermaid), and sidebar all follow the scheme; preference persists across restarts.
@@ -15,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Context meter in the composer: a ring showing how much of the model context window the session is using, with exact token counts on hover. It turns amber at 75% and red at 90%.
 - Context usage is read from each CLI rather than estimated, so the window matches whatever model the session actually runs. Claude Code, Codex, and OpenCode report it; Cursor does not expose token usage over ACP, so no meter is shown for Cursor sessions.
 - The last context reading is stored with the session, so reopening a closed session shows its meter right away instead of waiting for the next turn.
+- Tab back/forward, like a browser: ⌘[ and ⌘] walk the tabs you actually visited, not the order they sit in the strip. Buttons live in the sidebar header, or in the title bar when the sidebar is closed. View menu: Go Back / Go Forward. Closed tabs drop out of the stack; visiting a different tab after going back clears forward.
+- Empty terminal panes grow a tiny snake on the grid. It hunts provider logos and pops a pixel speech bubble when it catches one.
 
 ### Fixed
 
@@ -41,5 +45,6 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/hardbeat920/monocode/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/hardbeat920/monocode/releases/tag/v0.1.0

@@ -4,7 +4,7 @@ import cursor from "../assets/providers/cursor.png";
 import opencode from "../assets/providers/opencode.png";
 import type { HarnessId } from "../lib/session";
 
-const ICONS: Record<HarnessId, string> = {
+export const HARNESS_ICONS: Record<HarnessId, string> = {
   claude,
   codex,
   cursor,
@@ -20,7 +20,7 @@ export function HarnessIcon({
 }) {
   return (
     <img
-      src={ICONS[harness]}
+      src={HARNESS_ICONS[harness]}
       alt=""
       draggable={false}
       className={`block object-contain ${className}`}

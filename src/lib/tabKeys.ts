@@ -6,6 +6,8 @@
  *   Split pane down     shift-cmd-d
  *   Next tab            shift-cmd-}
  *   Previous tab        shift-cmd-{
+ *   Back in tab history cmd-[
+ *   Forward in history  cmd-]
  *   Activate tab 1–8    cmd-1 … cmd-8
  *   Last tab            cmd-9
  *   Cycle next tab      ctrl-tab
@@ -22,6 +24,8 @@ export type TabCommand =
   | "close"
   | "next"
   | "prev"
+  | "back"
+  | "forward"
   | "split-right"
   | "split-down"
   | "new-terminal"
@@ -64,6 +68,8 @@ export function tabCommand(e: KeyboardEvent): TabCommand | null {
   if (key === "t") return "new";
   if (key === "w") return "close";
   if (key === "d") return "split-right";
+  if (e.key === "[" || e.code === "BracketLeft") return "back";
+  if (e.key === "]" || e.code === "BracketRight") return "forward";
   if (key >= "1" && key <= "8") return { activate: Number(key) - 1 };
   if (key === "9") return { activate: -1 };
   return null;

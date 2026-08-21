@@ -46,4 +46,26 @@ describe("tabCommand", () => {
     expect(tabCommand(key({ key: "t", metaKey: true }))).toBe("new");
     expect(tabCommand(key({ key: "d", metaKey: true }))).toBe("split-right");
   });
+
+  it("walks tab visit history with cmd-brackets", () => {
+    expect(
+      tabCommand(key({ key: "[", code: "BracketLeft", metaKey: true })),
+    ).toBe("back");
+    expect(
+      tabCommand(key({ key: "]", code: "BracketRight", metaKey: true })),
+    ).toBe("forward");
+  });
+
+  it("keeps shift-cmd-brackets as adjacent tab cycle", () => {
+    expect(
+      tabCommand(
+        key({ key: "{", code: "BracketLeft", metaKey: true, shiftKey: true }),
+      ),
+    ).toBe("prev");
+    expect(
+      tabCommand(
+        key({ key: "}", code: "BracketRight", metaKey: true, shiftKey: true }),
+      ),
+    ).toBe("next");
+  });
 });

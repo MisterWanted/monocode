@@ -11,10 +11,10 @@ pub fn dispatch(app: &AppHandle, id: &str) {
         "new_window" => {
             let _ = crate::window::open_new_window(app);
         }
-        "new_tab" | "close_tab" | "next_tab" | "prev_tab" | "split_right" | "split_down"
-        | "focus_left" | "focus_right" | "focus_up" | "focus_down" | "toggle_sidebar"
-        | "sidebar_opacity" | "open_project" | "go_to_file" | "find_in_project" | "find"
-        | "new_terminal" | "new_terminal_tab" => {
+        "new_tab" | "close_tab" | "next_tab" | "prev_tab" | "back_tab" | "forward_tab"
+        | "split_right" | "split_down" | "focus_left" | "focus_right" | "focus_up"
+        | "focus_down" | "toggle_sidebar" | "sidebar_opacity" | "open_project" | "go_to_file"
+        | "find_in_project" | "find" | "new_terminal" | "new_terminal_tab" => {
             let _ = app.emit(id, ());
         }
         _ => {}
@@ -54,6 +54,12 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .build(app)?;
     let prev_tab = MenuItemBuilder::with_id("prev_tab", "Previous Tab")
         .accelerator("CmdOrCtrl+Shift+[")
+        .build(app)?;
+    let back_tab = MenuItemBuilder::with_id("back_tab", "Go Back")
+        .accelerator("CmdOrCtrl+[")
+        .build(app)?;
+    let forward_tab = MenuItemBuilder::with_id("forward_tab", "Go Forward")
+        .accelerator("CmdOrCtrl+]")
         .build(app)?;
 
     let focus_left = MenuItemBuilder::with_id("focus_left", "Focus Pane Left")
@@ -97,6 +103,8 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .separator()
         .item(&prev_tab)
         .item(&next_tab)
+        .item(&back_tab)
+        .item(&forward_tab)
         .build()?;
 
     let view = SubmenuBuilder::new(app, "View")
