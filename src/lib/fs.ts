@@ -85,6 +85,14 @@ export function gitFileDiff(cwd: string, relative: string): Promise<GitFileDiff>
   return invoke<GitFileDiff>("git_file_diff", { cwd, relative });
 }
 
+export function gitStageContents(
+  cwd: string,
+  relative: string,
+  contents: string,
+): Promise<void> {
+  return invoke<void>("git_stage_contents", { cwd, relative, contents });
+}
+
 export function gitStageFile(cwd: string, relative: string): Promise<void> {
   return invoke<void>("git_stage_file", { cwd, relative });
 }

@@ -1,6 +1,7 @@
 import { Chunk } from "@codemirror/merge";
 import {
   EditorState,
+  Facet,
   RangeSet,
   RangeSetBuilder,
   StateEffect,
@@ -22,6 +23,21 @@ import {
 const DIFF_CONFIG = { scanLimit: 5_000, timeout: 100 };
 
 const setOriginalEffect = StateEffect.define<string | null>();
+
+export type GitTextRange = { from: number; to: number };
+
+type ChunkRange = {
+  fromA: number;
+  toA: number;
+  fromB: number;
+  toB: number;
+};
+
+type GitStageHandler = (contents: string) => Promise<void> | void;
+
+const gitStageFacet = Facet.define<GitStageHandler, GitStageHandler | null>({
+  combine: (values) => values[0] ?? null,
+});
 
 const insertedLine = Decoration.line({ class: "cm-gitInsertedLine" });
 const LINE_HEIGHT = Math.round(13 * 1.6);
@@ -92,7 +108,8 @@ const gitDecorations = StateField.define<GitDecorations>({
     }
     return value;
   },
-  provide: (field) => EditorView.decorations.from(field, (value) => value.lines),
+  provide: (field) =>
+    EditorView.decorations.from(field, (value) => value.lines),
 });
 
 class DeletedLinesWidget extends WidgetType {
@@ -111,7 +128,7 @@ class DeletedLinesWidget extends WidgetType {
     );
   }
 
-  toDOM(view: EditorView) {
+  toDOM() {
     const wrap = document.createElement("div");
     wrap.className = "cm-gitDeletedChunk";
     wrap.setAttribute("aria-hidden", "true");
@@ -120,7 +137,6 @@ class DeletedLinesWidget extends WidgetType {
       line.className = "cm-gitDeletedLine";
       line.textContent = text || "\u00a0";
     }
-    wrap.appendChild(revertButton(view, this.pos));
     return wrap;
   }
 
@@ -133,49 +149,14 @@ class DeletedLinesWidget extends WidgetType {
   }
 }
 
-class RevertWidget extends WidgetType {
-  constructor(readonly pos: number) {
-    super();
-  }
-
-  eq(other: RevertWidget) {
-    return this.pos === other.pos;
-  }
-
-  toDOM(view: EditorView) {
-    const wrap = document.createElement("span");
-    wrap.style.cssText =
-      "position:relative;display:inline-block;width:0;height:0";
-    wrap.appendChild(revertButton(view, this.pos));
-    return wrap;
-  }
-
-  ignoreEvent() {
-    return true;
-  }
-}
-
-function revertButton(view: EditorView, pos: number) {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "cm-gitRevert";
-  button.title = "Revert change";
-  button.setAttribute("aria-label", "Revert change");
-  button.innerHTML = UNDO_SVG;
-  button.addEventListener("mousedown", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    revertChunkAt(view, pos);
-  });
-  return button;
-}
-
-export function editorGit(): Extension {
+export function editorGit(options?: { onStage?: GitStageHandler }): Extension {
   return [
+    options?.onStage ? gitStageFacet.of(options.onStage) : [],
     originalField,
     chunksField,
     gitDecorations,
     gitGutter,
+    gitHunkActions,
     gitOverview,
     gitTheme,
   ];
@@ -240,9 +221,10 @@ export function diffLineStats(
   return { additions, deletions };
 }
 
-export function diffLineStatsForView(
-  view: EditorView,
-): { additions: number; deletions: number } {
+export function diffLineStatsForView(view: EditorView): {
+  additions: number;
+  deletions: number;
+} {
   return diffLineStats(
     view.state.doc,
     view.state.field(chunksField),
@@ -257,7 +239,7 @@ export function setGitOriginal(view: EditorView, original: string | null) {
   view.dispatch({ effects: setOriginalEffect.of(original) });
 }
 
-/** Apply HEAD text to an editor state. Used by the view and by tests. */
+/** Apply git original (index) text to an editor state. Used by the view and by tests. */
 export function stateWithGitOriginal(
   doc: string,
   original: string | null,
@@ -270,16 +252,11 @@ export function stateWithGitOriginal(
 export function revertChunkAt(view: EditorView, pos: number): boolean {
   const original = view.state.field(originalField);
   if (!original) return false;
-  const chunk = findChunk(
-    view.state.doc,
-    view.state.field(chunksField),
-    pos,
-  );
-  if (!chunk) return false;
   const changes = revertChunkChanges(
     original,
     view.state.doc,
-    chunk,
+    pos,
+    actionRange(view),
     view.state.lineBreak,
   );
   if (!changes) return false;
@@ -291,14 +268,47 @@ export function revertChunkText(
   original: string,
   current: string,
   pos: number,
+  selection?: GitTextRange | null,
 ): string | null {
   const orig = textFromString(original);
   const doc = textFromString(current);
-  const chunk = findChunk(doc, chunksFor(orig, doc), pos);
-  if (!chunk) return null;
-  const changes = revertChunkChanges(orig, doc, chunk, "\n");
+  const changes = revertChunkChanges(orig, doc, pos, selection, "\n");
   if (!changes) return null;
   return doc.replace(changes.from, changes.to, changes.insert).toString();
+}
+
+export function stageChunkText(
+  original: string,
+  current: string,
+  pos: number,
+  selection?: GitTextRange | null,
+): string | null {
+  const orig = textFromString(original);
+  const doc = textFromString(current);
+  const changes = stageChunkChanges(orig, doc, pos, selection, "\n");
+  if (!changes) return null;
+  return orig.replace(changes.from, changes.to, changes.insert).toString();
+}
+
+export async function stageChunkAt(
+  view: EditorView,
+  pos: number,
+): Promise<boolean> {
+  const original = view.state.field(originalField);
+  const onStage = view.state.facet(gitStageFacet);
+  if (!original || !onStage) return false;
+  const contents = stageChunkText(
+    original.toString(),
+    view.state.doc.toString(),
+    pos,
+    actionRange(view),
+  );
+  if (contents == null) return false;
+  await onStage(contents);
+  if (view.state.field(originalField)?.toString() !== contents) {
+    setGitOriginal(view, contents);
+  }
+  return true;
 }
 
 export function findChunk(
@@ -327,21 +337,175 @@ function chunksFor(original: Text | null, current: Text): readonly Chunk[] {
 function revertChunkChanges(
   original: Text,
   doc: Text,
-  chunk: Chunk,
+  pos: number,
+  selection: GitTextRange | null | undefined,
   lineBreak: string,
 ): { from: number; to: number; insert: Text } | null {
-  let insert = original.sliceString(
-    chunk.fromA,
-    Math.max(chunk.fromA, chunk.toA - 1),
+  const range = actionChunkRange(original, doc, pos, selection);
+  if (!range) return null;
+  return applySide(
+    original,
+    doc,
+    range.fromA,
+    range.toA,
+    range.fromB,
+    range.toB,
+    lineBreak,
   );
-  if (chunk.fromA !== chunk.toA && chunk.toB <= doc.length) {
+}
+
+function stageChunkChanges(
+  original: Text,
+  doc: Text,
+  pos: number,
+  selection: GitTextRange | null | undefined,
+  lineBreak: string,
+): { from: number; to: number; insert: Text } | null {
+  const range = actionChunkRange(original, doc, pos, selection);
+  if (!range) return null;
+  return applySide(
+    doc,
+    original,
+    range.fromB,
+    range.toB,
+    range.fromA,
+    range.toA,
+    lineBreak,
+  );
+}
+
+function applySide(
+  source: Text,
+  target: Text,
+  fromS: number,
+  toS: number,
+  fromT: number,
+  toT: number,
+  lineBreak: string,
+): { from: number; to: number; insert: Text } {
+  let insert = source.sliceString(fromS, Math.max(fromS, toS - 1));
+  if (fromS !== toS && toT <= target.length) {
     insert += lineBreak;
   }
   return {
-    from: chunk.fromB,
-    to: Math.min(doc.length, chunk.toB),
+    from: fromT,
+    to: Math.min(target.length, toT),
     insert: textFromString(insert),
   };
+}
+
+function actionRange(view: EditorView): GitTextRange | null {
+  const selection = view.state.selection.main;
+  if (selection.empty) return null;
+  return { from: selection.from, to: selection.to };
+}
+
+function actionChunkRange(
+  original: Text,
+  doc: Text,
+  pos: number,
+  selection: GitTextRange | null | undefined,
+): ChunkRange | null {
+  const chunk = findChunk(doc, chunksFor(original, doc), pos);
+  if (!chunk) return null;
+  return narrowChunk(original, doc, chunk, selection);
+}
+
+function narrowChunk(
+  original: Text,
+  doc: Text,
+  chunk: Chunk,
+  selection: GitTextRange | null | undefined,
+): ChunkRange {
+  const whole = {
+    fromA: chunk.fromA,
+    toA: chunk.toA,
+    fromB: chunk.fromB,
+    toB: chunk.toB,
+  };
+  const selected = selectedLines(doc, selection);
+  const hunkB = hunkLines(doc, chunk.fromB, chunk.toB, chunk.endB);
+  if (!selected || !hunkB) return whole;
+
+  const fromLine = Math.max(selected.fromLine, hunkB.fromLine);
+  const toLine = Math.min(selected.toLine, hunkB.toLine);
+  if (fromLine > toLine) return whole;
+  if (fromLine === hunkB.fromLine && toLine === hunkB.toLine) return whole;
+
+  const nextB = offsetsForLines(doc, fromLine, toLine);
+  const hunkA = hunkLines(original, chunk.fromA, chunk.toA, chunk.endA);
+  if (!hunkA) {
+    return {
+      fromA: chunk.fromA,
+      toA: chunk.toA,
+      fromB: nextB.from,
+      toB: nextB.to,
+    };
+  }
+
+  const aCount = hunkA.toLine - hunkA.fromLine + 1;
+  const bCount = hunkB.toLine - hunkB.fromLine + 1;
+  if (aCount === bCount) {
+    const delta = fromLine - hunkB.fromLine;
+    const length = toLine - fromLine;
+    const aFromLine = hunkA.fromLine + delta;
+    const aToLine = aFromLine + length;
+    const nextA = offsetsForLines(original, aFromLine, aToLine);
+    return {
+      fromA: nextA.from,
+      toA: nextA.to,
+      fromB: nextB.from,
+      toB: nextB.to,
+    };
+  }
+
+  return {
+    fromA: chunk.fromA,
+    toA: chunk.toA,
+    fromB: nextB.from,
+    toB: nextB.to,
+  };
+}
+
+function selectedLines(
+  doc: Text,
+  range: GitTextRange | null | undefined,
+): { fromLine: number; toLine: number } | null {
+  if (!range || range.from === range.to) return null;
+  const from = Math.min(range.from, range.to);
+  const to = Math.max(range.from, range.to);
+  const start = doc.lineAt(Math.min(from, doc.length)).number;
+  let end = doc.lineAt(Math.min(to, doc.length)).number;
+  if (to > from && doc.lineAt(Math.min(to, doc.length)).from === to) {
+    end = Math.max(start, end - 1);
+  }
+  return { fromLine: start, toLine: end };
+}
+
+function hunkLines(
+  doc: Text,
+  from: number,
+  to: number,
+  end: number,
+): { fromLine: number; toLine: number } | null {
+  if (from === to) return null;
+  if (doc.length === 0) return { fromLine: 1, toLine: 1 };
+  const start = Math.min(from, doc.length);
+  const last = Math.max(start, Math.min(end, doc.length) - 1);
+  return {
+    fromLine: doc.lineAt(start).number,
+    toLine: doc.lineAt(last).number,
+  };
+}
+
+function offsetsForLines(
+  doc: Text,
+  fromLine: number,
+  toLine: number,
+): { from: number; to: number } {
+  const from = doc.line(fromLine).from;
+  const last = doc.line(toLine);
+  return { from, to: last.to + 1 };
 }
 
 export function deletedLineTexts(original: Text, chunk: Chunk): string[] {
@@ -427,19 +591,8 @@ function buildDecorations(state: EditorState): GitDecorations {
     const start = Math.min(chunk.fromB, state.doc.length);
     const last = Math.max(start, Math.min(chunk.endB, state.doc.length) - 1);
     let line = state.doc.lineAt(start);
-    let first = true;
     while (line.from <= last) {
       lineItems.push({ from: line.from, deco: insertedLine });
-      if (first && deleted.length === 0) {
-        lineItems.push({
-          from: line.from,
-          deco: Decoration.widget({
-            widget: new RevertWidget(line.from),
-            side: -1,
-          }),
-        });
-      }
-      first = false;
       markItems.push({ from: line.from });
       if (line.number >= state.doc.lines) break;
       line = state.doc.line(line.number + 1);
@@ -477,14 +630,6 @@ function sameText(a: Text | null, b: Text | null): boolean {
 const gitGutter = gutter({
   class: "cm-gitGutter",
   markers: (view) => view.state.field(gitDecorations).gutter,
-  domEventHandlers: {
-    mousedown(view, line, event) {
-      if ((event.target as HTMLElement | null)?.closest("button")) return false;
-      if (!revertChunkAt(view, line.from)) return false;
-      event.preventDefault();
-      return true;
-    },
-  },
 });
 
 function activeChunkIndex(view: EditorView, positions: number[]): number {
@@ -571,7 +716,10 @@ const gitOverview = ViewPlugin.fromClass(
         return;
       }
       this.dom.hidden = false;
-      const height = Math.max(1, this.dom.clientHeight || this.view.dom.clientHeight);
+      const height = Math.max(
+        1,
+        this.dom.clientHeight || this.view.dom.clientHeight,
+      );
       for (const tick of overviewTicks(state.doc, chunks, original)) {
         const el = document.createElement("div");
         el.className = `cm-gitOverviewTick cm-gitOverview-${tick.kind}`;
@@ -583,23 +731,191 @@ const gitOverview = ViewPlugin.fromClass(
   },
 );
 
+const gitHunkActions = ViewPlugin.fromClass(
+  class {
+    readonly bar: HTMLDivElement;
+    readonly revertButton: HTMLButtonElement;
+    readonly stageButton: HTMLButtonElement;
+    hover = -1;
+    busy = false;
+
+    constructor(readonly view: EditorView) {
+      this.bar = document.createElement("div");
+      this.bar.className = "cm-gitHunkBar";
+      this.bar.hidden = true;
+      this.revertButton = hunkButton("Revert change", UNDO_SVG);
+      this.stageButton = hunkButton("Stage change", PLUS_SVG);
+      this.bar.append(this.revertButton, this.stageButton);
+      this.revertButton.addEventListener("mousedown", (event) => {
+        this.onAction(event, "revert");
+      });
+      this.stageButton.addEventListener("mousedown", (event) => {
+        this.onAction(event, "stage");
+      });
+      this.stageButton.hidden = view.state.facet(gitStageFacet) == null;
+      view.dom.appendChild(this.bar);
+      view.dom.addEventListener("mousemove", this.onMove);
+      view.dom.addEventListener("mouseleave", this.onLeave);
+      view.scrollDOM.addEventListener("scroll", this.onScroll, {
+        passive: true,
+      });
+    }
+
+    update(update: ViewUpdate) {
+      if (
+        update.state.field(chunksField) !== update.startState.field(chunksField)
+      ) {
+        this.hover = -1;
+      }
+      if (
+        update.docChanged ||
+        update.geometryChanged ||
+        update.viewportChanged ||
+        update.state.field(chunksField) !== update.startState.field(chunksField)
+      ) {
+        this.sync();
+      }
+      this.stageButton.hidden = update.state.facet(gitStageFacet) == null;
+    }
+
+    destroy() {
+      this.view.dom.removeEventListener("mousemove", this.onMove);
+      this.view.dom.removeEventListener("mouseleave", this.onLeave);
+      this.view.scrollDOM.removeEventListener("scroll", this.onScroll);
+      this.bar.remove();
+    }
+
+    onMove = (event: MouseEvent) => {
+      if (this.busy) return;
+      if (event.target instanceof Node && this.bar.contains(event.target)) {
+        this.sync();
+        return;
+      }
+      const index = hunkIndexAt(this.view, event.clientY);
+      if (index !== this.hover) this.hover = index;
+      this.sync();
+    };
+
+    onLeave = (event: MouseEvent) => {
+      if (
+        event.relatedTarget instanceof Node &&
+        this.bar.contains(event.relatedTarget)
+      ) {
+        return;
+      }
+      this.hover = -1;
+      this.sync();
+    };
+
+    onScroll = () => {
+      this.sync();
+    };
+
+    onAction(event: MouseEvent, action: "revert" | "stage") {
+      event.preventDefault();
+      event.stopPropagation();
+      const chunk = this.view.state.field(chunksField)[this.hover];
+      if (!chunk || this.busy) return;
+      const pos = widgetPos(this.view.state.doc, chunk);
+      if (action === "revert") {
+        revertChunkAt(this.view, pos);
+        return;
+      }
+      this.busy = true;
+      void stageChunkAt(this.view, pos).finally(() => {
+        this.busy = false;
+        this.sync();
+      });
+    }
+
+    sync() {
+      const chunk = this.view.state.field(chunksField)[this.hover];
+      if (!chunk) {
+        this.bar.hidden = true;
+        return;
+      }
+      const bounds = hunkScreenBounds(this.view, chunk);
+      const gutter = this.view.dom.querySelector(".cm-gitGutter");
+      if (!bounds || !gutter) {
+        this.bar.hidden = true;
+        return;
+      }
+      const scroller = this.view.scrollDOM.getBoundingClientRect();
+      if (bounds.bottom < scroller.top || bounds.top > scroller.bottom) {
+        this.bar.hidden = true;
+        return;
+      }
+      const editor = this.view.dom.getBoundingClientRect();
+      const gutterRect = gutter.getBoundingClientRect();
+      this.bar.hidden = false;
+      this.stageButton.hidden = this.view.state.facet(gitStageFacet) == null;
+      const height = this.bar.offsetHeight;
+      const width = this.bar.offsetWidth;
+      const mid = (bounds.top + bounds.bottom) / 2;
+      this.bar.style.top = `${mid - editor.top - height / 2}px`;
+      this.bar.style.left = `${gutterRect.left - editor.left + (gutterRect.width - width) / 2}px`;
+    }
+  },
+);
+
+function hunkButton(label: string, svg: string) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "cm-gitHunkBtn";
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.innerHTML = svg;
+  return button;
+}
+
+function hunkIndexAt(view: EditorView, clientY: number): number {
+  const chunks = view.state.field(chunksField);
+  for (let i = 0; i < chunks.length; i++) {
+    const bounds = hunkScreenBounds(view, chunks[i]!);
+    if (!bounds) continue;
+    if (clientY >= bounds.top && clientY <= bounds.bottom) return i;
+  }
+  return -1;
+}
+
+function hunkScreenBounds(
+  view: EditorView,
+  chunk: Chunk,
+): { top: number; bottom: number } | null {
+  const doc = view.state.doc;
+  const from = widgetPos(doc, chunk);
+  const start = view.lineBlockAt(from);
+  let top = start.top;
+  let bottom = start.bottom;
+  if (chunk.fromB !== chunk.toB) {
+    const last = Math.max(from, Math.min(chunk.endB, doc.length) - 1);
+    bottom = view.lineBlockAt(last).bottom;
+  }
+  const scroller = view.scrollDOM.getBoundingClientRect();
+  return {
+    top: scroller.top + top - view.scrollDOM.scrollTop,
+    bottom: scroller.top + bottom - view.scrollDOM.scrollTop,
+  };
+}
+
 const gitTheme = EditorView.theme({
   "&": {
     position: "relative",
   },
   ".cm-gitGutter": {
-    width: "4px",
+    width: "22px",
     padding: "0",
-    minWidth: "4px",
+    minWidth: "22px",
+    overflow: "visible",
   },
   ".cm-gitGutter .cm-gutterElement": {
+    display: "flex",
+    justifyContent: "flex-end",
     padding: "0",
-    cursor: "pointer",
   },
   ".cm-gitMarker": {
     width: "3px",
     height: "100%",
-    marginLeft: "1px",
   },
   ".cm-gitAdd": {
     backgroundColor: "#34d399",
@@ -645,38 +961,45 @@ const gitTheme = EditorView.theme({
   ".cm-gitOverview-mod": {
     display: "flex",
     flexDirection: "row",
-    background:
-      "linear-gradient(to right, #f87171 0 50%, #34d399 50% 100%)",
+    background: "linear-gradient(to right, #f87171 0 50%, #34d399 50% 100%)",
   },
-  ".cm-line": {
-    position: "relative",
-  },
-  ".cm-gitRevert": {
+  ".cm-gitHunkBar": {
     position: "absolute",
-    top: "1px",
-    left: "0",
-    zIndex: "6",
+    zIndex: "24",
+    display: "flex",
+    flexDirection: "column",
+    overflow: "hidden",
+    userSelect: "none",
+    borderRadius: "4px",
+    color: "var(--color-content)",
+    background:
+      "color-mix(in srgb, var(--color-background-base) 92%, transparent)",
+    boxShadow:
+      "0 0 0 1px color-mix(in srgb, var(--color-content) 14%, transparent), 0 6px 16px color-mix(in srgb, #000 22%, transparent)",
+  },
+  ".cm-gitHunkBtn": {
     display: "grid",
     placeItems: "center",
     width: "18px",
     height: "18px",
     padding: "0",
     border: "none",
-    borderRadius: "4px",
-    color: "var(--color-content)",
-    background:
-      "color-mix(in srgb, var(--color-background-base) 88%, transparent)",
-    boxShadow:
-      "0 0 0 1px color-mix(in srgb, var(--color-content) 12%, transparent)",
-    opacity: "0",
-    pointerEvents: "none",
+    color: "inherit",
+    background: "transparent",
     cursor: "pointer",
   },
-  ".cm-line:hover .cm-gitRevert, .cm-gitDeletedChunk:hover > .cm-gitRevert, .cm-gitRevert:focus-visible": {
-    opacity: "1",
-    pointerEvents: "auto",
+  ".cm-gitHunkBtn:hover": {
+    backgroundColor:
+      "color-mix(in srgb, var(--color-content) 12%, transparent)",
+  },
+  ".cm-gitHunkBtn:focus-visible": {
+    outline: "1px solid var(--color-accent)",
+    outlineOffset: "-1px",
   },
 });
 
 const UNDO_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>';
+
+const PLUS_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>';

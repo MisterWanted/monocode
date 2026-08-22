@@ -4,10 +4,42 @@ import { Chunk } from "@codemirror/merge";
 import {
   findChunk,
   revertChunkText,
+  stageChunkText,
   deletedLineTexts,
   overviewTicks,
   stateWithGitOriginal,
 } from "./editorGit";
+
+describe("stageChunkText", () => {
+  it("stages a whole added hunk and leaves later hunks unstaged", () => {
+    const original = "alpha\nbeta\ngamma\ndelta\n";
+    const current = "alpha\nBETA\ngamma\nDELTA\n";
+    const beta = Text.of(current.split("\n")).line(2).from;
+    expect(stageChunkText(original, current, beta)).toBe(
+      "alpha\nBETA\ngamma\ndelta\n",
+    );
+  });
+
+  it("stages selected added lines and excludes the rest of the hunk", () => {
+    const original = "alpha\ngamma\n";
+    const current = "alpha\nbeta\ndelta\ngamma\n";
+    const doc = Text.of(current.split("\n"));
+    const beta = doc.line(2);
+    expect(
+      stageChunkText(original, current, beta.from, {
+        from: beta.from,
+        to: beta.to,
+      }),
+    ).toBe("alpha\nbeta\ngamma\n");
+  });
+
+  it("stages a deleted hunk", () => {
+    const original = "alpha\nbeta\ngamma\n";
+    const current = "alpha\ngamma\n";
+    const pos = Text.of(current.split("\n")).line(2).from;
+    expect(stageChunkText(original, current, pos)).toBe(current);
+  });
+});
 
 describe("revertChunkText", () => {
   it("restores a deleted line", () => {
@@ -35,6 +67,19 @@ describe("revertChunkText", () => {
     const original = "alpha\nbeta\ngamma\n";
     const current = "alpha\nBETA\ngamma\n";
     expect(revertChunkText(original, current, 0)).toBeNull();
+  });
+
+  it("reverts selected added lines and keeps the rest of the hunk", () => {
+    const original = "alpha\ngamma\n";
+    const current = "alpha\nbeta\ndelta\ngamma\n";
+    const doc = Text.of(current.split("\n"));
+    const beta = doc.line(2);
+    expect(
+      revertChunkText(original, current, beta.from, {
+        from: beta.from,
+        to: beta.to,
+      }),
+    ).toBe("alpha\ndelta\ngamma\n");
   });
 });
 

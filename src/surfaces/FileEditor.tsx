@@ -37,6 +37,7 @@ import { formatText } from "../lib/format";
 import {
   basename,
   gitFileDiff,
+  gitStageContents,
   notifyGitChanged,
   readTextFile,
   subscribeGitChanged,
@@ -259,6 +260,24 @@ export function FileEditor({
     [path],
   );
 
+  const stageGit = useCallback(
+    async (contents: string) => {
+      const relative = displayPath(path, cwd);
+      if (!cwd || cwd === "~" || !relative || relative === path) {
+        throw new Error("Can't stage this file");
+      }
+      try {
+        await gitStageContents(cwd, relative, contents);
+        notifyGitChanged();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setSaveState({ status: "error", message });
+        throw error;
+      }
+    },
+    [cwd, path],
+  );
+
   const dirtyChange = useCallback(
     (dirty: boolean) => {
       dirtyRef.current = dirty;
@@ -340,6 +359,7 @@ export function FileEditor({
                 onDirtyChange={dirtyChange}
                 onErrorCountChange={errorCountChange}
                 onSave={save}
+                onStageGit={showDiff ? stageGit : undefined}
                 onDocChange={setDraft}
               />
             </div>
@@ -357,6 +377,7 @@ export function FileEditor({
           onDirtyChange={dirtyChange}
           onErrorCountChange={errorCountChange}
           onSave={save}
+          onStageGit={showDiff ? stageGit : undefined}
         />
       )}
       <footer className="flex h-6 shrink-0 items-center border-t border-content/10 px-2.5 font-mono text-[10.5px] text-content/40">
@@ -390,6 +411,7 @@ function CodeMirrorEditor({
   onDirtyChange,
   onErrorCountChange,
   onSave,
+  onStageGit,
   onDocChange,
 }: {
   path: string;
@@ -401,6 +423,7 @@ function CodeMirrorEditor({
   onDirtyChange: (dirty: boolean) => void;
   onErrorCountChange: (count: number) => void;
   onSave: (content: string) => Promise<void>;
+  onStageGit?: (contents: string) => Promise<void>;
   onDocChange?: (content: string) => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -411,6 +434,7 @@ function CodeMirrorEditor({
   const onDirtyChangeRef = useRef(onDirtyChange);
   const onErrorCountChangeRef = useRef(onErrorCountChange);
   const onSaveRef = useRef(onSave);
+  const onStageGitRef = useRef(onStageGit);
   const onDocChangeRef = useRef(onDocChange);
   const valueRef = useRef(value);
   const gitOriginalRef = useRef(gitOriginal);
@@ -427,6 +451,7 @@ function CodeMirrorEditor({
   onDirtyChangeRef.current = onDirtyChange;
   onErrorCountChangeRef.current = onErrorCountChange;
   onSaveRef.current = onSave;
+  onStageGitRef.current = onStageGit;
   onDocChangeRef.current = onDocChange;
   valueRef.current = value;
   gitOriginalRef.current = gitOriginal;
@@ -551,8 +576,16 @@ function CodeMirrorEditor({
       parent: host,
       extensions: [
         minimalSetup,
+        showDiff
+          ? editorGit(
+              onStageGit
+                ? {
+                    onStage: (contents) => onStageGitRef.current?.(contents),
+                  }
+                : undefined,
+            )
+          : [],
         lineNumbers(),
-        showDiff ? editorGit() : [],
         foldGutter(),
         highlightActiveLine(),
         highlightActiveLineGutter(),
