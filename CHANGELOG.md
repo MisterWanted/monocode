@@ -7,8 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-08-22
+
 ### Added
 
+- Editor diff hunks show a centered gutter pill with revert and stage. Plus stages that hunk (or the selected lines) so you can commit some changes and leave the rest unstaged.
 - Pi Coding Agent as a harness: if `pi` is installed, it shows up next to Claude Code, Codex, Cursor, and OpenCode. Live sessions spawn `pi --mode rpc` with the user's existing config and extensions loaded, so globally installed Pi packages (todos, subagents, custom tools) still run. Project-local `.pi` resources follow Pi's saved trust file. TUI-only widgets do not appear in MonoCode; extension confirm/select dialogs use the existing approval UI. MonoCode's runtime-mode control does not gate Pi tools — Pi has no native permission prompts.
 - Closing the window no longer kills a running chat: MonoCode hides instead, and reopening the app brings the same window back mid-turn.
 - Quit (⌘Q) asks first if chats are still running, then restores those sessions the next time you open the app and continues the turn.
@@ -58,6 +61,7 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/hardbeat920/monocode/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/hardbeat920/monocode/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/hardbeat920/monocode/releases/tag/v0.1.0
