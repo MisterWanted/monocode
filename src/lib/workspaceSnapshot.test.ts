@@ -1,0 +1,153 @@
+import { describe, expect, it } from "vitest";
+import { INTERRUPT_MESSAGE } from "./inFlight";
+import { leaf, newFileTab, newTab, newTerminalFile } from "./layout";
+import { newSession, type Session } from "./session";
+import {
+  collectWorkspaceSnapshot,
+  hydrateWorkspaceSnapshot,
+  parseWorkspaceSnapshot,
+} from "./workspaceSnapshot";
+
+function chat(id: string, cwd: string): Session {
+  const session = newSession("cursor", cwd);
+  session.id = id;
+  session.blocks = [{ id: "u1", role: "user", text: "hello" }];
+  session.providerSessionId = "p1";
+  return session;
+}
+
+describe("collectWorkspaceSnapshot", () => {
+  it("stores tabs, stubs, and the focused tab — not transcripts", () => {
+    const session = chat("s1", "/tmp/a");
+    session.blocks.push({ id: "a1", role: "assistant", text: "hi" });
+    const file = newFileTab("/tmp/a/README.md", "/tmp/a");
+    const tab = {
+      ...newTab("s1"),
+      id: "t1",
+      editorPanes: [
+        { id: "e1", files: [file], activeFileId: file.id },
+      ],
+    };
+    const snapshot = collectWorkspaceSnapshot(
+      [tab],
+      [session],
+      "t1",
+      "/tmp/a",
+    );
+    expect(snapshot.activeTabId).toBe("t1");
+    expect(snapshot.tabs[0]?.editorPanes[0]?.files[0]?.path).toBe(
+      "/tmp/a/README.md",
+    );
+    expect(snapshot.sessions).toEqual([
+      expect.objectContaining({
+        id: "s1",
+        cwd: "/tmp/a",
+        providerSessionId: "p1",
+      }),
+    ]);
+    expect("blocks" in snapshot.sessions[0]!).toBe(false);
+  });
+});
+
+describe("parseWorkspaceSnapshot", () => {
+  it("returns null for empty or invalid payloads", () => {
+    expect(parseWorkspaceSnapshot(null)).toBeNull();
+    expect(parseWorkspaceSnapshot({ tabs: [], activeTabId: "t1" })).toBeNull();
+    expect(parseWorkspaceSnapshot({ tabs: [{}], activeTabId: "t1" })).toBeNull();
+  });
+
+  it("drops unknown fields and repairs a missing active tab", () => {
+    const tab = { ...newTab("s1"), id: "t1" };
+    const parsed = parseWorkspaceSnapshot({
+      tabs: [{ ...tab, extra: true }],
+      sessions: [{ id: "s1", harness: "cursor", runtimeMode: "supervised", cwd: "/tmp/a" }],
+      activeTabId: "missing",
+      projectCwd: "/tmp/a",
+    });
+    expect(parsed?.activeTabId).toBe("t1");
+    expect(parsed?.tabs[0] && "extra" in parsed.tabs[0]).toBe(false);
+  });
+});
+
+describe("hydrateWorkspaceSnapshot", () => {
+  it("reopens splits, file panes, and stored transcripts", () => {
+    const left = chat("s1", "/tmp/a");
+    const right = chat("s2", "/tmp/a");
+    const file = newFileTab("/tmp/a/src/lib.rs", "/tmp/a");
+    const tab = {
+      ...newTab("s1"),
+      id: "t1",
+      layout: {
+        type: "split" as const,
+        id: "split1",
+        dir: "right" as const,
+        children: [leaf("s1"), leaf("e1")],
+        sizes: [0.5, 0.5],
+      },
+      focusedId: "e1",
+      editorPanes: [{ id: "e1", files: [file], activeFileId: file.id }],
+    };
+    const snapshot = collectWorkspaceSnapshot(
+      [tab],
+      [left, right],
+      "t1",
+      "/tmp/a",
+    );
+    const loaded = new Map([
+      ["s1", { ...left, blocks: [...left.blocks, { id: "a1", role: "assistant" as const, text: "stored" }] }],
+    ]);
+    const workspace = hydrateWorkspaceSnapshot(snapshot, loaded);
+    expect(workspace?.tabs).toHaveLength(1);
+    expect(workspace?.tabs[0]?.layout).toEqual(tab.layout);
+    expect(workspace?.tabs[0]?.editorPanes[0]?.files[0]?.path).toBe(
+      "/tmp/a/src/lib.rs",
+    );
+    expect(workspace?.sessions.find((session) => session.id === "s1")?.blocks).toEqual(
+      loaded.get("s1")?.blocks,
+    );
+    expect(workspace?.sessions.find((session) => session.id === "s2")?.blocks).toEqual(
+      [],
+    );
+  });
+
+  it("marks in-flight chats interrupted and adds a tab if they were parked", () => {
+    const open = chat("s1", "/tmp/a");
+    const parked = chat("s2", "/tmp/a");
+    parked.busy = true;
+    const snapshot = collectWorkspaceSnapshot(
+      [{ ...newTab("s1"), id: "t1" }],
+      [open, parked],
+      "t1",
+      "/tmp/a",
+    );
+    const workspace = hydrateWorkspaceSnapshot(
+      snapshot,
+      new Map([
+        ["s1", open],
+        ["s2", parked],
+      ]),
+      new Set(["s2"]),
+    );
+    expect(workspace?.tabs).toHaveLength(2);
+    const resumed = workspace?.sessions.find((session) => session.id === "s2");
+    expect(resumed?.busy).toBe(false);
+    expect(resumed?.blocks.some((block) => block.text === INTERRUPT_MESSAGE)).toBe(
+      true,
+    );
+  });
+
+  it("keeps terminal-only tabs", () => {
+    const term = newTerminalFile("/tmp/a");
+    const tab = {
+      kind: "session" as const,
+      id: "t1",
+      layout: leaf("p1"),
+      focusedId: "p1",
+      editorPanes: [],
+      terminalPanes: [{ id: "p1", files: [term], activeFileId: term.id }],
+    };
+    const snapshot = collectWorkspaceSnapshot([tab], [], "t1", "/tmp/a");
+    const workspace = hydrateWorkspaceSnapshot(snapshot, new Map());
+    expect(workspace?.tabs[0]?.terminalPanes[0]?.files[0]?.terminal).toBe(true);
+  });
+});

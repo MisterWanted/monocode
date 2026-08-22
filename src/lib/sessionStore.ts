@@ -151,6 +151,17 @@ export async function takeInFlightSessions(): Promise<
   return Array.isArray(rows) ? rows : [];
 }
 
+export async function saveWorkspaceSnapshot(
+  snapshot: unknown,
+): Promise<void> {
+  await invoke("workspace_set_snapshot", { snapshot });
+}
+
+export async function loadWorkspaceSnapshot(): Promise<unknown | null> {
+  const raw = await invoke<unknown | null>("workspace_get_snapshot");
+  return raw ?? null;
+}
+
 function sanitizeBlock(block: Block): Block | null {
   const next: Block = {
     id: block.id,

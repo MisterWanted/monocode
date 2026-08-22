@@ -154,6 +154,7 @@ import {
   listSessionsByProject,
   persistFingerprint,
   replaceInFlightSessions,
+  saveWorkspaceSnapshot,
   shouldPersistSession,
   upsertSession,
   type SessionSummary,
@@ -190,6 +191,10 @@ import {
   inFlightSnapshotKey,
   shouldWriteInFlightSnapshot,
 } from "./lib/inFlight";
+import {
+  collectWorkspaceSnapshot,
+  workspaceSnapshotKey,
+} from "./lib/workspaceSnapshot";
 import {
   bindResumedSessions,
   hasInFlightSessions,
@@ -294,9 +299,14 @@ export default function App({
   const [activeTabId, setActiveTabId] = useState(
     () => windowTransfer?.activeTabId ?? resumed?.activeTabId ?? seed.tab.id,
   );
-  const [composerFocused, setComposerFocused] = useState(
-    () => !!windowTransfer || !!resumed,
-  );
+  const [composerFocused, setComposerFocused] = useState(() => {
+    if (windowTransfer) return true;
+    if (!resumed) return false;
+    const tab =
+      resumed.tabs.find((entry) => entry.id === resumed.activeTabId) ??
+      resumed.tabs[0];
+    return !!tab && resumed.sessions.some((session) => session.id === tab.focusedId);
+  });
   /** Tab id -> project name, kept in sync with the rendered title tabs. */
   const tabProjectsRef = useRef(new Map<string, string>());
   const projectOfTab = useCallback(
@@ -332,6 +342,8 @@ export default function App({
   tabsRef.current = tabs;
   const activeTabIdRef = useRef(activeTabId);
   activeTabIdRef.current = activeTabId;
+  const projectCwdRef = useRef(projectCwd);
+  projectCwdRef.current = projectCwd;
   const tabVisitRef = useRef(emptyTabVisitHistory(activeTabId));
   const tabVisitFromHistoryRef = useRef(false);
   const [tabVisitNav, setTabVisitNav] = useState({
@@ -344,6 +356,7 @@ export default function App({
   const lastPersistedUserBlock = useRef(new Map<string, string>());
   const inFlightSyncKey = useRef<string | null>(null);
   const sawInFlight = useRef(false);
+  const workspaceSyncKey = useRef<string | null>(null);
   const observedSessions = useRef(new Map<string, Session>());
   const pendingPersist = useRef(new Map<string, Session>());
   // Tokens arrive many times per frame; apply them once so React/markdown aren't
@@ -431,6 +444,8 @@ export default function App({
       void persistQuitState(
         sessionsRef.current,
         tabsRef.current,
+        activeTabIdRef.current,
+        projectCwdRef.current,
         "unload",
       ).finally(() => {
         void reapWindowRuntime(sessionsRef.current, tabsRef.current);
@@ -555,6 +570,8 @@ export default function App({
     const releaseQuit = setQuitWorkspace(
       () => sessionsRef.current,
       () => tabsRef.current,
+      () => activeTabIdRef.current,
+      () => projectCwdRef.current,
       flushHarnessEvents,
     );
     void getCurrentWindow()
@@ -568,7 +585,15 @@ export default function App({
           void hideCurrentWindow();
           return;
         }
-        void closeCurrentWindow();
+        void persistQuitState(
+          sessionsRef.current,
+          tabsRef.current,
+          activeTabIdRef.current,
+          projectCwdRef.current,
+          "unload",
+        ).finally(() => {
+          void closeCurrentWindow();
+        });
       })
       .then((fn) => {
         unlistenClose = fn;
@@ -697,6 +722,23 @@ export default function App({
     inFlightSyncKey.current = key;
     void replaceInFlightSessions(refs).catch(() => undefined);
   }, [sessions, tabs]);
+
+  useEffect(() => {
+    if (windowTransfer) return;
+    const snapshot = collectWorkspaceSnapshot(
+      tabs,
+      sessions,
+      activeTabId,
+      projectCwd,
+    );
+    const key = workspaceSnapshotKey(snapshot);
+    if (workspaceSyncKey.current === key) return;
+    workspaceSyncKey.current = key;
+    const timer = window.setTimeout(() => {
+      void saveWorkspaceSnapshot(snapshot).catch(() => undefined);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [tabs, sessions, activeTabId, projectCwd, windowTransfer]);
 
   useEffect(() => {
     if (lastProjectPath()) return;

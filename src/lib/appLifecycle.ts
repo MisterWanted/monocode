@@ -10,19 +10,27 @@ import {
   inFlightRefs,
   markTurnInterrupted,
   quitWhileBusyMessage,
+  wasTurnInterrupted,
   workspaceFromResumed,
   type ResumedWorkspace,
 } from "./inFlight";
-import type { WorkspaceTab } from "./layout";
+import { leafIds, type WorkspaceTab } from "./layout";
 import { killPty } from "./pty";
 import type { Session } from "./session";
 import {
   getSession,
   listInFlightSessions,
+  loadWorkspaceSnapshot,
   replaceInFlightSessions,
+  saveWorkspaceSnapshot,
   shouldPersistSession,
   upsertSession,
 } from "./sessionStore";
+import {
+  collectWorkspaceSnapshot,
+  hydrateWorkspaceSnapshot,
+  parseWorkspaceSnapshot,
+} from "./workspaceSnapshot";
 
 export type { ResumedWorkspace };
 export { hasInFlightSessions };
@@ -34,6 +42,8 @@ let bootingResumed: ResumedWorkspace | null = null;
 let liveWorkspace: {
   sessions: () => Session[];
   tabs: () => WorkspaceTab[];
+  activeTabId: () => string;
+  projectCwd: () => string;
   flush: () => void;
 } | null = null;
 
@@ -44,9 +54,11 @@ export function isAppQuitting(): boolean {
 export function setQuitWorkspace(
   sessions: () => Session[],
   tabs: () => WorkspaceTab[],
+  activeTabId: () => string,
+  projectCwd: () => string,
   flush: () => void,
 ): () => void {
-  liveWorkspace = { sessions, tabs, flush };
+  liveWorkspace = { sessions, tabs, activeTabId, projectCwd, flush };
   bootingResumed = null;
   return () => {
     if (liveWorkspace?.sessions === sessions) liveWorkspace = null;
@@ -56,7 +68,12 @@ export function setQuitWorkspace(
 export async function handleQuitRequested(): Promise<void> {
   if (liveWorkspace) {
     liveWorkspace.flush();
-    await confirmQuitAndExit(liveWorkspace.sessions(), liveWorkspace.tabs());
+    await confirmQuitAndExit(
+      liveWorkspace.sessions(),
+      liveWorkspace.tabs(),
+      liveWorkspace.activeTabId(),
+      liveWorkspace.projectCwd(),
+    );
     return;
   }
   if (bootingResumed) {
@@ -78,15 +95,43 @@ export function loadResumedWorkspace(): Promise<ResumedWorkspace | null> {
 }
 
 async function loadResumedWorkspaceOnce(): Promise<ResumedWorkspace | null> {
-  const refs = await listInFlightSessions().catch(() => []);
-  if (refs.length === 0) return null;
-  const sessions: Session[] = [];
-  for (const ref of refs) {
-    const record = await getSession(ref.sessionId).catch(() => null);
-    if (!record) continue;
-    sessions.push(markTurnInterrupted(record));
+  const [snapshotRaw, refs] = await Promise.all([
+    loadWorkspaceSnapshot().catch(() => null),
+    listInFlightSessions().catch(() => []),
+  ]);
+  const interrupted = new Set(refs.map((ref) => ref.sessionId));
+  const snapshot = parseWorkspaceSnapshot(snapshotRaw);
+
+  const ids = new Set<string>();
+  if (snapshot) {
+    for (const stub of snapshot.sessions) ids.add(stub.id);
+    for (const tab of snapshot.tabs) {
+      for (const id of leafIds(tab.layout)) ids.add(id);
+    }
   }
-  const workspace = workspaceFromResumed(sessions);
+  for (const ref of refs) ids.add(ref.sessionId);
+
+  const loaded = new Map<string, Session>();
+  await Promise.all(
+    [...ids].map(async (id) => {
+      const record = await getSession(id).catch(() => null);
+      if (record) loaded.set(id, record);
+    }),
+  );
+
+  let workspace = snapshot
+    ? hydrateWorkspaceSnapshot(snapshot, loaded, interrupted)
+    : null;
+  if (!workspace && refs.length > 0) {
+    const sessions: Session[] = [];
+    for (const ref of refs) {
+      const record = loaded.get(ref.sessionId);
+      if (!record) continue;
+      sessions.push(markTurnInterrupted(record));
+    }
+    workspace = workspaceFromResumed(sessions);
+  }
+
   bootingResumed = workspace;
   if (workspace) {
     await Promise.all(
@@ -131,6 +176,8 @@ export async function persistLiveTranscripts(
 export async function persistQuitState(
   sessions: Session[],
   tabs: WorkspaceTab[],
+  activeTabId: string,
+  projectCwd: string,
   mode: "quit" | "unload" = "quit",
 ): Promise<void> {
   const refs = inFlightRefs(sessions, tabs);
@@ -144,6 +191,9 @@ export async function persistQuitState(
       await upsertSession(payload).catch(() => null);
     }),
   );
+  await saveWorkspaceSnapshot(
+    collectWorkspaceSnapshot(tabs, sessions, activeTabId, projectCwd),
+  ).catch(() => undefined);
   // Vite/webview reload must not wipe a restored snapshot: those chats are idle
   // in this process until Continue runs.
   if (mode === "quit" || refs.length > 0) {
@@ -157,17 +207,29 @@ async function persistBootingResume(workspace: ResumedWorkspace): Promise<void> 
       .filter(shouldPersistSession)
       .map((session) => upsertSession(session).catch(() => null)),
   );
+  await saveWorkspaceSnapshot(
+    collectWorkspaceSnapshot(
+      workspace.tabs,
+      workspace.sessions,
+      workspace.activeTabId,
+      workspace.projectCwd,
+    ),
+  ).catch(() => undefined);
   await replaceInFlightSessions(
-    workspace.sessions.map((session) => ({
-      sessionId: session.id,
-      cwd: session.cwd,
-    })),
+    workspace.sessions
+      .filter(wasTurnInterrupted)
+      .map((session) => ({
+        sessionId: session.id,
+        cwd: session.cwd,
+      })),
   ).catch(() => undefined);
 }
 
 async function confirmQuitAndExit(
   sessions: Session[],
   tabs: WorkspaceTab[],
+  activeTabId: string,
+  projectCwd: string,
 ): Promise<void> {
   if (quitDialogOpen) return;
   quitDialogOpen = true;
@@ -183,7 +245,7 @@ async function confirmQuitAndExit(
     }
     quitting = true;
     try {
-      await persistQuitState(sessions, tabs);
+      await persistQuitState(sessions, tabs, activeTabId, projectCwd);
       await invoke("confirm_quit");
     } catch {
       quitting = false;

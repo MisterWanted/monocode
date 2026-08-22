@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Closing the window no longer kills a running chat: MonoCode hides instead, and reopening the app brings the same window back mid-turn.
 - Quit (⌘Q) asks first if chats are still running, then restores those sessions the next time you open the app and continues the turn.
+- Reopening the app restores the last window: tabs, splits, and open file or terminal panes, instead of always starting on a blank homepage.
 
 ### Fixed
 

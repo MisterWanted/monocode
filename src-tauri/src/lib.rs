@@ -162,6 +162,8 @@ pub fn run() {
             session_store::session_set_in_flight,
             session_store::session_list_in_flight,
             session_store::session_take_in_flight,
+            session_store::workspace_set_snapshot,
+            session_store::workspace_get_snapshot,
             checkpoint::session_checkpoint_ensure,
             checkpoint::session_checkpoint_capture,
             checkpoint::session_checkpoint_sync,

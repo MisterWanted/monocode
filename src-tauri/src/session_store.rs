@@ -220,6 +220,34 @@ pub fn session_take_in_flight(
     take_in_flight(&mut conn).map_err(|e| e.to_string())
 }
 
+const WORKSPACE_SNAPSHOT_MAX_BYTES: usize = 2_000_000;
+
+#[tauri::command]
+pub fn workspace_set_snapshot(
+    store: State<'_, SessionStore>,
+    snapshot: Value,
+) -> Result<(), String> {
+    if !snapshot.is_object() {
+        return Err("workspace snapshot must be an object".into());
+    }
+    let json = serde_json::to_string(&snapshot).map_err(|e| e.to_string())?;
+    if json.len() > WORKSPACE_SNAPSHOT_MAX_BYTES {
+        return Err("workspace snapshot is too large".into());
+    }
+    let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
+    set_workspace_snapshot(&conn, &json).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn workspace_get_snapshot(store: State<'_, SessionStore>) -> Result<Option<Value>, String> {
+    let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
+    let json = get_workspace_snapshot(&conn).map_err(|e| e.to_string())?;
+    match json {
+        None => Ok(None),
+        Some(raw) => serde_json::from_str(&raw).map_err(|e| e.to_string()),
+    }
+}
+
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -268,6 +296,35 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             params![now_millis()],
         )?;
     }
+    if current < 5 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS workspace_snapshot (
+               id INTEGER PRIMARY KEY CHECK (id = 1),
+               snapshot_json TEXT NOT NULL,
+               updated_at INTEGER NOT NULL
+             );",
+        )?;
+        conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (5, ?1)",
+            params![now_millis()],
+        )?;
+    }
+    // Create even when a version row already exists (another build may have
+    // used the same numbers, or a previous run recorded the version without
+    // the table). Restore writes into these; missing tables look like a
+    // blank homepage.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS in_flight_sessions (
+           session_id TEXT PRIMARY KEY,
+           cwd TEXT NOT NULL,
+           sort_index INTEGER NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS workspace_snapshot (
+           id INTEGER PRIMARY KEY CHECK (id = 1),
+           snapshot_json TEXT NOT NULL,
+           updated_at INTEGER NOT NULL
+         );",
+    )?;
     Ok(())
 }
 
@@ -493,6 +550,27 @@ fn take_in_flight(conn: &mut Connection) -> rusqlite::Result<Vec<InFlightSession
     tx.execute("DELETE FROM in_flight_sessions", [])?;
     tx.commit()?;
     Ok(sessions)
+}
+
+fn set_workspace_snapshot(conn: &Connection, json: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO workspace_snapshot (id, snapshot_json, updated_at)
+         VALUES (1, ?1, ?2)
+         ON CONFLICT(id) DO UPDATE SET
+           snapshot_json = excluded.snapshot_json,
+           updated_at = excluded.updated_at",
+        params![json, now_millis()],
+    )?;
+    Ok(())
+}
+
+fn get_workspace_snapshot(conn: &Connection) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT snapshot_json FROM workspace_snapshot WHERE id = 1",
+        [],
+        |row| row.get(0),
+    )
+    .optional()
 }
 
 fn validate_id(value: &str, label: &str) -> Result<(), String> {
@@ -838,5 +916,98 @@ mod tests {
         .unwrap();
         replace_in_flight(&mut conn, &[]).unwrap();
         assert!(take_in_flight(&mut conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn migration_v5_creates_workspace_snapshot_table() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM schema_migrations WHERE version = 5",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        let table: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'workspace_snapshot'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(table, 1);
+    }
+
+    #[test]
+    fn workspace_snapshot_round_trips_and_replaces() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        set_workspace_snapshot(&conn, r#"{"tabs":[{"id":"t1"}]}"#).unwrap();
+        let first = get_workspace_snapshot(&conn).unwrap().unwrap();
+        assert!(first.contains("t1"));
+        set_workspace_snapshot(&conn, r#"{"tabs":[{"id":"t2"}]}"#).unwrap();
+        let second = get_workspace_snapshot(&conn).unwrap().unwrap();
+        assert!(second.contains("t2"));
+        assert!(!second.contains("t1"));
+    }
+
+    #[test]
+    fn migrate_creates_workspace_tables_when_versions_already_recorded() {
+        let path = std::env::temp_dir().join(format!(
+            "monocode-stale-migrations-{}-{}.db",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_migrations (
+                   version INTEGER PRIMARY KEY,
+                   applied_at INTEGER NOT NULL
+                 );
+                 CREATE TABLE sessions (
+                   id TEXT PRIMARY KEY,
+                   cwd TEXT NOT NULL,
+                   harness TEXT NOT NULL,
+                   model TEXT NOT NULL,
+                   model_settings TEXT NOT NULL DEFAULT '{}',
+                   runtime_mode TEXT NOT NULL,
+                   title TEXT NOT NULL,
+                   provider_session_id TEXT,
+                   blocks_json TEXT NOT NULL DEFAULT '[]',
+                   created_at INTEGER NOT NULL,
+                   updated_at INTEGER NOT NULL
+                 );
+                 INSERT INTO schema_migrations (version, applied_at)
+                   VALUES (1, 1), (2, 1), (3, 1), (4, 1), (5, 1);",
+            )
+            .unwrap();
+        }
+        let store = SessionStore::open(path.clone()).unwrap();
+        let conn = store.conn.lock().unwrap();
+        let inflight: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'in_flight_sessions'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let snapshot: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'workspace_snapshot'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        drop(conn);
+        drop(store);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(inflight, 1);
+        assert_eq!(snapshot, 1);
     }
 }
