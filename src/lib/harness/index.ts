@@ -32,6 +32,14 @@ export {
   forgetClaudeSession,
   bindClaudeSession,
 } from "./claude";
+export {
+  sendPiTurn,
+  cancelPiTurn,
+  respondPiApproval,
+  stopPiSession,
+  forgetPiSession,
+  bindPiSession,
+} from "./pi";
 export { generateCursorSessionTitle } from "./cursorTitle";
 export { generateCodexSessionTitle } from "./codexTitle";
 export { generateOpenCodeSessionTitle } from "./opencodeTitle";
@@ -66,6 +74,7 @@ export { refreshCursorCatalog } from "./cursorCatalog";
 export { refreshCodexCatalog } from "./codexCatalog";
 export { refreshOpenCodeCatalog } from "./opencodeCatalog";
 export { refreshClaudeCatalog } from "./claudeCatalog";
+export { refreshPiCatalog } from "./piCatalog";
 export { registerBuiltinHarnesses } from "./register";
 export {
   getHarnessAvailabilitySnapshot,

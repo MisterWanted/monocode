@@ -5,6 +5,7 @@ import {
   resolveCodexBinary,
   resolveCursorBinary,
   resolveOpenCodeBinary,
+  resolvePiBinary,
 } from "./child";
 import { isLiveHarness } from "./registry";
 
@@ -15,6 +16,7 @@ const UNAVAILABLE_HINT: Record<HarnessId, string> = {
   codex: "Install Codex CLI and run `codex login`",
   cursor: "Install Cursor CLI and run `agent login`",
   opencode: "Install OpenCode and run `opencode auth login`",
+  pi: "Install Pi (`npm i -g @earendil-works/pi-coding-agent`) and authenticate",
 };
 
 let availability: HarnessAvailability = {
@@ -22,6 +24,7 @@ let availability: HarnessAvailability = {
   codex: false,
   cursor: false,
   opencode: false,
+  pi: false,
 };
 let version = 0;
 let inflight: Promise<void> | null = null;
@@ -83,6 +86,14 @@ export function probeHarnessAvailability(): Promise<void> {
       if (id === "opencode") {
         try {
           await resolveOpenCodeBinary();
+          return [id, true] as const;
+        } catch {
+          return [id, false] as const;
+        }
+      }
+      if (id === "pi") {
+        try {
+          await resolvePiBinary();
           return [id, true] as const;
         } catch {
           return [id, false] as const;

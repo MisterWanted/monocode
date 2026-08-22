@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdin, Command, Stdio};
@@ -196,6 +196,19 @@ pub fn harness_resolve_claude() -> Result<CursorBinary, String> {
         })
         .ok_or_else(|| {
             "Claude Code CLI not found. Install it from https://claude.com/product/claude-code and run `claude auth login`, then retry."
+                .into()
+        })
+}
+
+/// Resolve the Pi coding agent CLI (`pi`).
+#[tauri::command]
+pub fn harness_resolve_pi() -> Result<CursorBinary, String> {
+    resolve_pi()
+        .map(|path| CursorBinary {
+            path: path.to_string_lossy().into_owned(),
+        })
+        .ok_or_else(|| {
+            "Pi CLI not found. Install it with `npm install -g @earendil-works/pi-coding-agent` and authenticate, then retry."
                 .into()
         })
 }
@@ -526,6 +539,7 @@ fn is_resolved_harness_binary(command: &str) -> bool {
         resolve_codex(),
         resolve_opencode(),
         resolve_claude(),
+        resolve_pi(),
     ]
     .into_iter()
     .flatten()
@@ -739,6 +753,92 @@ fn resolve_claude() -> Option<PathBuf> {
     candidates.into_iter().find(|path| path.is_file())
 }
 
+fn resolve_pi() -> Option<PathBuf> {
+    let home = dirs_home().map(PathBuf::from);
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Some(home) = &home {
+        for name in ["pi-coding-agent", "pi"] {
+            candidates.push(home.join(".local/bin").join(name));
+            candidates.push(home.join(".npm-global/bin").join(name));
+            candidates.push(home.join("n/bin").join(name));
+        }
+    }
+    for name in ["pi-coding-agent", "pi"] {
+        candidates.push(PathBuf::from("/opt/homebrew/bin").join(name));
+        candidates.push(PathBuf::from("/usr/local/bin").join(name));
+    }
+    if let Some(from_shell) = which_via_login_shell("pi-coding-agent") {
+        candidates.push(from_shell);
+    }
+    if let Some(from_shell) = which_via_login_shell("pi") {
+        candidates.push(from_shell);
+    }
+
+    candidates.into_iter().find(|path| is_pi_coding_agent(path))
+}
+
+fn is_pi_coding_agent(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if name != "pi" && name != "pi-coding-agent" {
+        return false;
+    }
+    if name == "pi-coding-agent" {
+        return true;
+    }
+    file_mentions_pi_coding_agent(path) || pi_help_mentions_rpc(path)
+}
+
+fn file_mentions_pi_coding_agent(path: &Path) -> bool {
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut buf = vec![0u8; 64 * 1024];
+    let Ok(n) = file.read(&mut buf) else {
+        return false;
+    };
+    let text = String::from_utf8_lossy(&buf[..n]);
+    text.contains("pi-coding-agent")
+        || text.contains("@earendil-works/pi")
+        || text.contains("@mariozechner/pi-coding-agent")
+        || text.contains("PI_CODING_AGENT")
+}
+
+fn pi_help_mentions_rpc(path: &Path) -> bool {
+    let mut cmd = Command::new(path);
+    cmd.arg("--help")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    isolate_child(&mut cmd);
+    let Ok(child) = cmd.spawn() else {
+        return false;
+    };
+    let pid = child.id();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    match rx.recv_timeout(Duration::from_secs(2)) {
+        Ok(Ok(output)) => {
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )
+            .to_ascii_lowercase();
+            text.contains("--mode") && text.contains("rpc")
+        }
+        _ => {
+            terminate(pid);
+            false
+        }
+    }
+}
+
 fn is_cursor_agent(path: &Path) -> bool {
     if !path.is_file() {
         return false;
@@ -865,6 +965,34 @@ mod tests {
         std::os::unix::fs::symlink(&target, &agent).unwrap();
         assert!(is_cursor_agent(&agent));
         assert!(!is_cursor_agent(&dir.join("missing")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pi_accepts_coding_agent_and_rejects_other_pi() {
+        let dir = std::env::temp_dir().join(format!("monocode-pi-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let named = dir.join("pi-coding-agent");
+        std::fs::write(&named, b"#!/bin/sh\n").unwrap();
+        assert!(is_pi_coding_agent(&named));
+
+        let shim = dir.join("pi");
+        std::fs::write(
+            &shim,
+            b"#!/usr/bin/env node\nrequire('@earendil-works/pi-coding-agent/cli.js');\n",
+        )
+        .unwrap();
+        assert!(is_pi_coding_agent(&shim));
+
+        let other = dir.join("pi");
+        std::fs::write(&other, b"#!/bin/sh\necho 3.14159\n").unwrap();
+        // Overwrite the shim: a calculator named `pi` must not match.
+        assert!(!file_mentions_pi_coding_agent(&other));
+        assert!(!is_pi_coding_agent(&other));
+
+        assert!(!is_pi_coding_agent(&dir.join("missing")));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

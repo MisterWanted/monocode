@@ -10,6 +10,7 @@ You need Node.js 20+, a current stable Rust toolchain, and at least one provider
 - [Codex](https://developers.openai.com/codex/cli) - `codex login`
 - [Cursor CLI](https://cursor.com/cli) - `agent login`
 - [OpenCode](https://opencode.ai) - `opencode auth login`
+- [Pi](https://pi.dev/) - `npm install -g @earendil-works/pi-coding-agent`
 
 macOS on Apple Silicon is the only supported target. Linux, Windows, and Intel Macs are out of scope.
 

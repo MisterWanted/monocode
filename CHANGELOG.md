@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Pi Coding Agent as a harness: if `pi` is installed, it shows up next to Claude Code, Codex, Cursor, and OpenCode. Live sessions spawn `pi --mode rpc` with the user's existing config and extensions loaded, so globally installed Pi packages (todos, subagents, custom tools) still run. Project-local `.pi` resources follow Pi's saved trust file. TUI-only widgets do not appear in MonoCode; extension confirm/select dialogs use the existing approval UI. MonoCode's runtime-mode control does not gate Pi tools — Pi has no native permission prompts.
 - Closing the window no longer kills a running chat: MonoCode hides instead, and reopening the app brings the same window back mid-turn.
 - Quit (⌘Q) asks first if chats are still running, then restores those sessions the next time you open the app and continues the turn.
 - Reopening the app restores the last window: tabs, splits, and open file or terminal panes, instead of always starting on a blank homepage.

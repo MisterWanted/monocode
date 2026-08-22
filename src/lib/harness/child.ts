@@ -199,6 +199,10 @@ export function resolveClaudeBinary(): Promise<{ path: string }> {
   return invoke("harness_resolve_claude");
 }
 
+export function resolvePiBinary(): Promise<{ path: string }> {
+  return invoke("harness_resolve_pi");
+}
+
 export function freeHarnessPort(): Promise<number> {
   return invoke("harness_free_port");
 }

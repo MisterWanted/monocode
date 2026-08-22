@@ -23,6 +23,7 @@ export type SkillSource =
   | "cursor"
   | "codex"
   | "opencode"
+  | "pi"
   | "monocode";
 
 export type Skill = {

@@ -1,13 +1,14 @@
 import type { ContextUsage } from "./contextUsage";
 import { defaultModelId, preferredModelSettings, resolveModel } from "./models";
 
-export type HarnessId = "claude" | "codex" | "cursor" | "opencode";
+export type HarnessId = "claude" | "codex" | "cursor" | "opencode" | "pi";
 
 export const HARNESSES: HarnessId[] = [
   "claude",
   "codex",
   "cursor",
   "opencode",
+  "pi",
 ];
 
 export type BlockRole =
@@ -134,6 +135,7 @@ export const HARNESS_LABEL: Record<HarnessId, string> = {
   codex: "codex",
   cursor: "cursor",
   opencode: "opencode",
+  pi: "pi",
 };
 
 export const HARNESS_TITLE: Record<HarnessId, string> = {
@@ -141,6 +143,7 @@ export const HARNESS_TITLE: Record<HarnessId, string> = {
   codex: "Codex",
   cursor: "Cursor",
   opencode: "OpenCode",
+  pi: "Pi",
 };
 
 export function newSession(

@@ -59,11 +59,15 @@ pub(crate) fn list_skills_from(project: &Path, home: Option<&Path>) -> Vec<Disco
         (".cursor/skills", "cursor"),
         (".codex/skills", "codex"),
         (".opencode/skills", "opencode"),
+        (".pi/skills", "pi"),
     ] {
         add_root(project.join(dir), "project", source);
         if let Some(home) = home {
             add_root(home.join(dir), "user", source);
         }
+    }
+    if let Some(home) = home {
+        add_root(home.join(".pi/agent/skills"), "user", "pi");
     }
 
     let mut out: Vec<DiscoveredSkill> = by_name.into_values().collect();
@@ -345,6 +349,30 @@ mod tests {
         let native = skills.iter().find(|s| s.name == "cursor-only").unwrap();
         assert_eq!(native.source, "cursor");
         assert_eq!(native.scope, "project");
+    }
+
+    #[test]
+    fn discovers_pi_project_and_user_skills() {
+        let project = tmp("proj-pi");
+        let home = tmp("home-pi");
+        write_skill(
+            &project.0.join(".pi/skills"),
+            "pi-review",
+            "---\nname: pi-review\ndescription: Pi project skill\n---\n",
+        );
+        write_skill(
+            &home.0.join(".pi/agent/skills"),
+            "pi-global",
+            "---\nname: pi-global\ndescription: Pi user skill\n---\n",
+        );
+
+        let skills = list_skills_from(&project.0, Some(&home.0));
+        let project_skill = skills.iter().find(|s| s.name == "pi-review").unwrap();
+        assert_eq!(project_skill.source, "pi");
+        assert_eq!(project_skill.scope, "project");
+        let user_skill = skills.iter().find(|s| s.name == "pi-global").unwrap();
+        assert_eq!(user_skill.source, "pi");
+        assert_eq!(user_skill.scope, "user");
     }
 
     #[test]

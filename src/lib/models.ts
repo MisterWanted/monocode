@@ -109,6 +109,12 @@ export const MODELS: AgentModel[] = [
     name: "Claude Sonnet 4.6",
   },
   { id: "opencode:gpt-5.4", harness: "opencode", name: "GPT-5.4" },
+  {
+    id: "pi:default",
+    harness: "pi",
+    name: "Default",
+    nativeId: "",
+  },
 ];
 
 export const DEFAULT_MODEL_ID: Record<HarnessId, string> = {
@@ -116,6 +122,7 @@ export const DEFAULT_MODEL_ID: Record<HarnessId, string> = {
   codex: "",
   cursor: "cursor:composer-2.5",
   opencode: "opencode:glm-5",
+  pi: "pi:default",
 };
 
 const FAVORITES_KEY = "monocode.favoriteModels";
@@ -135,6 +142,7 @@ const HARNESS_ORDER: HarnessId[] = [
   "codex",
   "cursor",
   "opencode",
+  "pi",
 ];
 
 let overlays: Partial<Record<HarnessId, AgentModel[]>> = {};
