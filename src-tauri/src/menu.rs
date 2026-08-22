@@ -11,6 +11,7 @@ pub fn dispatch(app: &AppHandle, id: &str) {
         "new_window" => {
             let _ = crate::window::open_new_window(app);
         }
+        "quit" => crate::window::request_quit(app),
         "new_tab" | "close_tab" | "next_tab" | "prev_tab" | "back_tab" | "forward_tab"
         | "split_right" | "split_down" | "focus_left" | "focus_right" | "focus_up"
         | "focus_down" | "toggle_sidebar" | "sidebar_opacity" | "open_project" | "go_to_file"
@@ -132,6 +133,9 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 
     #[cfg(target_os = "macos")]
     {
+        let quit = MenuItemBuilder::with_id("quit", "Quit MonoCode")
+            .accelerator("CmdOrCtrl+Q")
+            .build(app)?;
         let app_menu = SubmenuBuilder::new(app, "MonoCode")
             .about(Some(AboutMetadata::default()))
             .separator()
@@ -139,7 +143,7 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             .hide_others()
             .show_all()
             .separator()
-            .quit()
+            .item(&quit)
             .build()?;
         let window_menu = SubmenuBuilder::new(app, "Window").build()?;
         window_menu.set_as_windows_menu_for_nsapp()?;

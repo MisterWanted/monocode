@@ -179,6 +179,47 @@ pub fn session_delete(store: State<'_, SessionStore>, session_id: String) -> Res
     delete_session(&conn, &session_id).map_err(|e| e.to_string())
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InFlightSession {
+    pub session_id: String,
+    pub cwd: String,
+}
+
+#[tauri::command]
+pub fn session_set_in_flight(
+    store: State<'_, SessionStore>,
+    sessions: Vec<InFlightSession>,
+) -> Result<(), String> {
+    for session in &sessions {
+        validate_id(&session.session_id, "session")?;
+        if session.cwd.trim().is_empty() {
+            return Err("cwd is required".into());
+        }
+    }
+    let mut conn = store.conn.lock().map_err(|_| "Session store is locked")?;
+    replace_in_flight(&mut conn, &sessions).map_err(|e| e.to_string())
+}
+
+/// Read the quit snapshot without clearing it. Vite/dev reloads must not
+/// consume the only copy.
+#[tauri::command]
+pub fn session_list_in_flight(
+    store: State<'_, SessionStore>,
+) -> Result<Vec<InFlightSession>, String> {
+    let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
+    list_in_flight(&conn).map_err(|e| e.to_string())
+}
+
+/// Read and clear the quit snapshot so a restored window cannot take it twice.
+#[tauri::command]
+pub fn session_take_in_flight(
+    store: State<'_, SessionStore>,
+) -> Result<Vec<InFlightSession>, String> {
+    let mut conn = store.conn.lock().map_err(|_| "Session store is locked")?;
+    take_in_flight(&mut conn).map_err(|e| e.to_string())
+}
+
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -211,6 +252,19 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         conn.execute("ALTER TABLE sessions ADD COLUMN context_window INTEGER", [])?;
         conn.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (3, ?1)",
+            params![now_millis()],
+        )?;
+    }
+    if current < 4 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS in_flight_sessions (
+               session_id TEXT PRIMARY KEY,
+               cwd TEXT NOT NULL,
+               sort_index INTEGER NOT NULL
+             );",
+        )?;
+        conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (4, ?1)",
             params![now_millis()],
         )?;
     }
@@ -391,6 +445,54 @@ fn get_session(conn: &Connection, session_id: &str) -> rusqlite::Result<Option<S
         },
     )
     .optional()
+}
+
+fn list_in_flight(conn: &Connection) -> rusqlite::Result<Vec<InFlightSession>> {
+    let mut statement = conn.prepare(
+        "SELECT session_id, cwd FROM in_flight_sessions ORDER BY sort_index ASC, session_id ASC",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok(InFlightSession {
+            session_id: row.get(0)?,
+            cwd: row.get(1)?,
+        })
+    })?;
+    rows.collect()
+}
+
+fn replace_in_flight(conn: &mut Connection, sessions: &[InFlightSession]) -> rusqlite::Result<()> {
+    let tx = conn.transaction()?;
+    tx.execute("DELETE FROM in_flight_sessions", [])?;
+    {
+        let mut insert = tx.prepare(
+            "INSERT INTO in_flight_sessions (session_id, cwd, sort_index)
+             VALUES (?1, ?2, ?3)",
+        )?;
+        for (index, session) in sessions.iter().enumerate() {
+            insert.execute(params![session.session_id, session.cwd, index as i64])?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+fn take_in_flight(conn: &mut Connection) -> rusqlite::Result<Vec<InFlightSession>> {
+    let tx = conn.transaction()?;
+    let sessions = {
+        let mut statement = tx.prepare(
+            "SELECT session_id, cwd FROM in_flight_sessions ORDER BY sort_index ASC, session_id ASC",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(InFlightSession {
+                session_id: row.get(0)?,
+                cwd: row.get(1)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    tx.execute("DELETE FROM in_flight_sessions", [])?;
+    tx.commit()?;
+    Ok(sessions)
 }
 
 fn validate_id(value: &str, label: &str) -> Result<(), String> {
@@ -652,5 +754,89 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(summary.branch.as_deref(), Some("fix-sidebar"));
         assert_eq!(summary.repo.as_deref(), Some("widget"));
+    }
+
+    #[test]
+    fn migration_v4_creates_in_flight_table() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM schema_migrations WHERE version = 4",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        let table: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'in_flight_sessions'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(table, 1);
+    }
+
+    #[test]
+    fn in_flight_set_take_is_ordered_and_destructive() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let mut conn = store.conn.lock().unwrap();
+        replace_in_flight(
+            &mut conn,
+            &[
+                InFlightSession {
+                    session_id: "s2".into(),
+                    cwd: "/tmp/b".into(),
+                },
+                InFlightSession {
+                    session_id: "s1".into(),
+                    cwd: "/tmp/a".into(),
+                },
+            ],
+        )
+        .unwrap();
+        let first = take_in_flight(&mut conn).unwrap();
+        assert_eq!(first.len(), 2);
+        assert_eq!(first[0].session_id, "s2");
+        assert_eq!(first[0].cwd, "/tmp/b");
+        assert_eq!(first[1].session_id, "s1");
+        let second = take_in_flight(&mut conn).unwrap();
+        assert!(second.is_empty());
+    }
+
+    #[test]
+    fn in_flight_list_does_not_clear() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let mut conn = store.conn.lock().unwrap();
+        replace_in_flight(
+            &mut conn,
+            &[InFlightSession {
+                session_id: "s1".into(),
+                cwd: "/tmp/a".into(),
+            }],
+        )
+        .unwrap();
+        let listed = list_in_flight(&conn).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].session_id, "s1");
+        let listed_again = list_in_flight(&conn).unwrap();
+        assert_eq!(listed_again.len(), 1);
+    }
+
+    #[test]
+    fn in_flight_replace_clears_previous() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let mut conn = store.conn.lock().unwrap();
+        replace_in_flight(
+            &mut conn,
+            &[InFlightSession {
+                session_id: "old".into(),
+                cwd: "/tmp/old".into(),
+            }],
+        )
+        .unwrap();
+        replace_in_flight(&mut conn, &[]).unwrap();
+        assert!(take_in_flight(&mut conn).unwrap().is_empty());
     }
 }

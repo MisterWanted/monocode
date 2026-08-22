@@ -94,7 +94,6 @@ import {
   sendHarnessTurn,
   steerHarnessTurn,
   startHarnessBridge,
-  killAllChildren,
   stopStreaming,
   pickTextHarness,
   type ApprovalDecision,
@@ -154,6 +153,7 @@ import {
   getSession,
   listSessionsByProject,
   persistFingerprint,
+  replaceInFlightSessions,
   shouldPersistSession,
   upsertSession,
   type SessionSummary,
@@ -172,7 +172,6 @@ import {
   type TabVisitHistory,
 } from "./lib/tabVisitHistory";
 import { applySkillsToTurn } from "./lib/skills";
-import { killAllPtys } from "./lib/pty";
 import { PaneTree } from "./surfaces/PaneTree";
 import { DiffPane } from "./surfaces/DiffPane";
 import {
@@ -184,6 +183,25 @@ import {
   mergeHistorySummary,
   historyWithLiveSessions,
 } from "./lib/sessionHistory";
+import {
+  CONTINUE_PROMPT,
+  canAutoContinue,
+  inFlightRefs,
+  inFlightSnapshotKey,
+  shouldWriteInFlightSnapshot,
+} from "./lib/inFlight";
+import {
+  bindResumedSessions,
+  hasInFlightSessions,
+  hideCurrentWindow,
+  closeCurrentWindow,
+  isAppQuitting,
+  persistLiveTranscripts,
+  persistQuitState,
+  reapWindowRuntime,
+  setQuitWorkspace,
+  type ResumedWorkspace,
+} from "./lib/appLifecycle";
 
 function setsEqual<T>(a: Set<T>, b: Set<T>): boolean {
   if (a.size !== b.size) return false;
@@ -191,6 +209,21 @@ function setsEqual<T>(a: Set<T>, b: Set<T>): boolean {
     if (!b.has(value)) return false;
   }
   return true;
+}
+
+type ScheduledFlush = { kind: "raf" | "timeout"; id: number };
+
+function cancelScheduledFlush(handle: ScheduledFlush | null) {
+  if (!handle) return;
+  if (handle.kind === "raf") cancelAnimationFrame(handle.id);
+  else clearTimeout(handle.id);
+}
+
+function scheduleHarnessFlush(run: () => void): ScheduledFlush {
+  if (document.hidden) {
+    return { kind: "timeout", id: window.setTimeout(run, 32) };
+  }
+  return { kind: "raf", id: requestAnimationFrame(run) };
 }
 
 function openSessionIds(tabs: WorkspaceTab[]): Set<string> {
@@ -226,13 +259,23 @@ function titleTabsEqual(a: TitleTab[], b: TitleTab[]): boolean {
 
 export default function App({
   windowTransfer = null,
+  resumed = null,
 }: {
   windowTransfer?: WindowTransferPayload | null;
+  resumed?: ResumedWorkspace | null;
 }) {
   const [projectCwd, setProjectCwd] = useState(
-    () => windowTransfer?.projectCwd ?? lastProjectPath() ?? "~",
+    () =>
+      windowTransfer?.projectCwd ??
+      resumed?.projectCwd ??
+      lastProjectPath() ??
+      "~",
   );
-  const [recents, setRecents] = useState(loadRecents);
+  const [recents, setRecents] = useState(() =>
+    resumed?.projectCwd && looksLikeProject(resumed.projectCwd)
+      ? rememberProject(resumed.projectCwd)
+      : loadRecents(),
+  );
   const [seed] = useState(() => {
     const cwd = lastProjectPath() ?? "~";
     const last = loadLastModelChoice();
@@ -243,16 +286,16 @@ export default function App({
     return { session, tab };
   });
   const [sessions, setSessions] = useState<Session[]>(
-    () => windowTransfer?.sessions ?? [seed.session],
+    () => windowTransfer?.sessions ?? resumed?.sessions ?? [seed.session],
   );
   const [tabs, setTabs] = useState<WorkspaceTab[]>(
-    () => windowTransfer?.tabs ?? [seed.tab],
+    () => windowTransfer?.tabs ?? resumed?.tabs ?? [seed.tab],
   );
   const [activeTabId, setActiveTabId] = useState(
-    () => windowTransfer?.activeTabId ?? seed.tab.id,
+    () => windowTransfer?.activeTabId ?? resumed?.activeTabId ?? seed.tab.id,
   );
   const [composerFocused, setComposerFocused] = useState(
-    () => !!windowTransfer,
+    () => !!windowTransfer || !!resumed,
   );
   /** Tab id -> project name, kept in sync with the rendered title tabs. */
   const tabProjectsRef = useRef(new Map<string, string>());
@@ -297,57 +340,66 @@ export default function App({
   });
   const turnGen = useRef(new Map<string, number>());
   const lastPersisted = useRef(new Map<string, string>());
+  const lastBoundProvider = useRef(new Map<string, string>());
+  const lastPersistedUserBlock = useRef(new Map<string, string>());
+  const inFlightSyncKey = useRef<string | null>(null);
+  const sawInFlight = useRef(false);
   const observedSessions = useRef(new Map<string, Session>());
   const pendingPersist = useRef(new Map<string, Session>());
   // Tokens arrive many times per frame; apply them once so React/markdown aren't
   // recomputed for every delta.
   const harnessQueued = useRef(new Map<string, HarnessEvent[]>());
-  const harnessRaf = useRef(0);
+  const harnessFlush = useRef<ScheduledFlush | null>(null);
   const skipForgetSessionIds = useRef(new Set<string>());
-  const windowTransferApplied = useRef(!!windowTransfer);
+  const importedSessionsApplied = useRef(false);
 
   useEffect(() => {
-    if (!windowTransfer || windowTransferApplied.current) return;
-    windowTransferApplied.current = true;
-    for (const session of windowTransfer.sessions) {
+    if (importedSessionsApplied.current) return;
+    const imported = windowTransfer?.sessions ?? resumed?.sessions;
+    if (!imported?.length) return;
+    importedSessionsApplied.current = true;
+    for (const session of imported) {
       observedSessions.current.set(session.id, session);
       lastPersisted.current.set(session.id, persistFingerprint(session));
+      const userId = lastUserBlockId(session);
+      if (userId) lastPersistedUserBlock.current.set(session.id, userId);
+      if (session.providerSessionId) {
+        lastBoundProvider.current.set(session.id, session.providerSessionId);
+      }
     }
-  }, [windowTransfer]);
+  }, [windowTransfer, resumed]);
 
   const flushHarnessEvents = useCallback(() => {
-    if (harnessRaf.current) {
-      cancelAnimationFrame(harnessRaf.current);
-      harnessRaf.current = 0;
-    }
+    cancelScheduledFlush(harnessFlush.current);
+    harnessFlush.current = null;
     const batches = harnessQueued.current;
     if (batches.size === 0) return;
     harnessQueued.current = new Map();
-    setSessions((prev) => {
-      let next = prev.map((session) => {
-        const events = batches.get(session.id);
-        return events ? events.reduce(applyHarnessEvent, session) : session;
-      });
-      if (!next.some((session, index) => session !== prev[index])) return prev;
-      syncDockBadge(next);
-      return next;
+    const prev = sessionsRef.current;
+    const next = prev.map((session) => {
+      const events = batches.get(session.id);
+      return events ? events.reduce(applyHarnessEvent, session) : session;
     });
+    if (!next.some((session, index) => session !== prev[index])) return;
+    sessionsRef.current = next;
+    syncDockBadge(next);
+    setSessions(next);
   }, []);
 
   const applyApprovalEvent = useCallback((sessionId: string, event: HarnessEvent) => {
-    setSessions((prev) => {
-      const queued = harnessQueued.current.get(sessionId) ?? [];
-      harnessQueued.current.delete(sessionId);
-      const events = [...queued, event];
-      const next = prev.map((session) =>
-        session.id === sessionId
-          ? events.reduce(applyHarnessEvent, session)
-          : session,
-      );
-      if (!next.some((session, index) => session !== prev[index])) return prev;
-      syncDockBadge(next);
-      return next;
-    });
+    const queued = harnessQueued.current.get(sessionId) ?? [];
+    harnessQueued.current.delete(sessionId);
+    const events = [...queued, event];
+    const prev = sessionsRef.current;
+    const next = prev.map((session) =>
+      session.id === sessionId
+        ? events.reduce(applyHarnessEvent, session)
+        : session,
+    );
+    if (!next.some((session, index) => session !== prev[index])) return;
+    sessionsRef.current = next;
+    syncDockBadge(next);
+    setSessions(next);
   }, []);
 
   const enqueueHarnessEvent = useCallback(
@@ -363,8 +415,8 @@ export default function App({
       const events = queued.get(sessionId);
       if (events) events.push(event);
       else queued.set(sessionId, [event]);
-      if (!harnessRaf.current) {
-        harnessRaf.current = requestAnimationFrame(flushHarnessEvents);
+      if (!harnessFlush.current) {
+        harnessFlush.current = scheduleHarnessFlush(flushHarnessEvents);
       }
     },
     [applyApprovalEvent, flushHarnessEvents],
@@ -372,10 +424,17 @@ export default function App({
 
   useEffect(() => {
     registerBuiltinHarnesses();
+    if (resumed?.sessions.length) bindResumedSessions(resumed.sessions);
     const stopBridge = startHarnessBridge();
     const reap = () => {
-      void killAllChildren();
-      void killAllPtys();
+      if (isAppQuitting()) return;
+      void persistQuitState(
+        sessionsRef.current,
+        tabsRef.current,
+        "unload",
+      ).finally(() => {
+        void reapWindowRuntime(sessionsRef.current, tabsRef.current);
+      });
     };
     window.addEventListener("pagehide", reap);
     window.addEventListener("beforeunload", reap);
@@ -383,12 +442,10 @@ export default function App({
       window.removeEventListener("pagehide", reap);
       window.removeEventListener("beforeunload", reap);
       stopBridge();
-      if (harnessRaf.current) {
-        cancelAnimationFrame(harnessRaf.current);
-        harnessRaf.current = 0;
-      }
+      cancelScheduledFlush(harnessFlush.current);
+      harnessFlush.current = null;
     };
-  }, []);
+  }, [resumed]);
 
   useEffect(() => {
     void probeHarnessAvailability();
@@ -472,7 +529,10 @@ export default function App({
     let unlisten: (() => void) | undefined;
     void getCurrentWindow()
       .onFocusChanged(({ payload: focused }) => {
-        if (focused) syncDockBadge(sessionsRef.current);
+        if (focused) {
+          flushHarnessEvents();
+          syncDockBadge(sessionsRef.current);
+        }
       })
       .then((fn) => {
         unlisten = fn;
@@ -480,7 +540,44 @@ export default function App({
     return () => {
       unlisten?.();
     };
-  }, []);
+  }, [flushHarnessEvents]);
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (!document.hidden) flushHarnessEvents();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [flushHarnessEvents]);
+
+  useEffect(() => {
+    let unlistenClose: (() => void) | undefined;
+    const releaseQuit = setQuitWorkspace(
+      () => sessionsRef.current,
+      () => tabsRef.current,
+      flushHarnessEvents,
+    );
+    void getCurrentWindow()
+      .onCloseRequested((event) => {
+        // Listening here makes close our job. Letting the default path run
+        // calls JS `window.destroy`, which Tauri denies without a permission.
+        event.preventDefault();
+        if (hasInFlightSessions(sessionsRef.current)) {
+          flushHarnessEvents();
+          void persistLiveTranscripts(sessionsRef.current);
+          void hideCurrentWindow();
+          return;
+        }
+        void closeCurrentWindow();
+      })
+      .then((fn) => {
+        unlistenClose = fn;
+      });
+    return () => {
+      releaseQuit();
+      unlistenClose?.();
+    };
+  }, [flushHarnessEvents]);
 
   const refreshHistory = useCallback(async (cwd: string) => {
     if (!cwd || cwd === "~") {
@@ -514,9 +611,38 @@ export default function App({
       if (observedSessions.current.get(session.id) === session) continue;
       observedSessions.current.set(session.id, session);
       const parked = !visibleIds.has(session.id);
+      const newlyBound =
+        !!session.providerSessionId &&
+        lastBoundProvider.current.get(session.id) !== session.providerSessionId;
+      const lastUserId = lastUserBlockId(session);
+      const newUserTurn =
+        !!lastUserId &&
+        lastPersistedUserBlock.current.get(session.id) !== lastUserId;
+      if (newlyBound && session.providerSessionId) {
+        lastBoundProvider.current.set(session.id, session.providerSessionId);
+      }
+      if (newUserTurn && lastUserId) {
+        lastPersistedUserBlock.current.set(session.id, lastUserId);
+      }
+      if (
+        (newlyBound || newUserTurn) &&
+        shouldPersistSession(session)
+      ) {
+        const snapshot = session;
+        void upsertSession(snapshot)
+          .then((summary) => {
+            if (!summary) return;
+            lastPersisted.current.set(snapshot.id, persistFingerprint(snapshot));
+          })
+          .catch(() => undefined);
+      }
       if (
         shouldPersistSession(session) &&
-        (!session.busy || parked || !lastPersisted.current.has(session.id))
+        (!session.busy ||
+          parked ||
+          newlyBound ||
+          newUserTurn ||
+          !lastPersisted.current.has(session.id))
       ) {
         pendingPersist.current.set(session.id, session);
       }
@@ -553,6 +679,24 @@ export default function App({
     }, 650);
     return () => window.clearTimeout(timer);
   }, [sessions]);
+
+  useEffect(() => {
+    const refs = inFlightRefs(sessions, tabs);
+    if (refs.length > 0) sawInFlight.current = true;
+    const key = inFlightSnapshotKey(refs);
+    if (
+      !shouldWriteInFlightSnapshot(
+        key,
+        refs,
+        inFlightSyncKey.current,
+        sawInFlight.current,
+      )
+    ) {
+      return;
+    }
+    inFlightSyncKey.current = key;
+    void replaceInFlightSessions(refs).catch(() => undefined);
+  }, [sessions, tabs]);
 
   useEffect(() => {
     if (lastProjectPath()) return;
@@ -2097,6 +2241,35 @@ export default function App({
     [enqueueHarnessEvent, flushHarnessEvents],
   );
 
+  const autoContinueKey = sessions
+    .filter(
+      (session) =>
+        canAutoContinue(session) && isLiveHarness(session.harness),
+    )
+    .map((session) => session.id)
+    .join("\n");
+
+  useEffect(() => {
+    if (!autoContinueKey) return;
+    const ids = autoContinueKey.split("\n");
+    // Delay past React StrictMode's dev remount so Continue is not claimed
+    // against a discarded tree (sessionStorage also survives Vite reloads).
+    const timer = window.setTimeout(() => {
+      for (const id of ids) {
+        const session = sessionsRef.current.find((entry) => entry.id === id);
+        if (
+          !session ||
+          !canAutoContinue(session) ||
+          !isLiveHarness(session.harness)
+        ) {
+          continue;
+        }
+        onSubmit(id, CONTINUE_PROMPT);
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [autoContinueKey, onSubmit]);
+
   const onStop = useCallback((sessionId: string) => {
     turnGen.current.set(sessionId, (turnGen.current.get(sessionId) ?? 0) + 1);
     flushHarnessEvents();
@@ -2517,6 +2690,13 @@ export default function App({
 function conversationTitle(session: Session): string {
   const title = sessionDisplayTitle(session.title, session.harness);
   return title === "New session" ? "" : title;
+}
+
+function lastUserBlockId(session: Session): string | undefined {
+  for (let i = session.blocks.length - 1; i >= 0; i--) {
+    if (session.blocks[i]?.role === "user") return session.blocks[i]?.id;
+  }
+  return undefined;
 }
 
 function isBlankSession(session: Session | undefined): boolean {

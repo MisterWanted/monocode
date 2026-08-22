@@ -159,6 +159,9 @@ pub fn run() {
             session_store::session_list_by_project,
             session_store::session_get,
             session_store::session_delete,
+            session_store::session_set_in_flight,
+            session_store::session_list_in_flight,
+            session_store::session_take_in_flight,
             checkpoint::session_checkpoint_ensure,
             checkpoint::session_checkpoint_capture,
             checkpoint::session_checkpoint_sync,
@@ -170,6 +173,9 @@ pub fn run() {
             set_window_background_blur,
             set_dock_badge,
             open_new_window,
+            window::hide_window,
+            window::destroy_window,
+            window::confirm_quit,
             window_transfer::stage_window_transfer,
             window_transfer::take_window_transfer,
             project_logo::save_project_logo,
@@ -184,13 +190,16 @@ pub fn run() {
             has_visible_windows: false,
             ..
         } => {
-            let _ = window::open_new_window(handle);
+            let _ = window::show_hidden_or_open_new(handle);
         }
-        #[cfg(target_os = "macos")]
         tauri::RunEvent::Ready => {
-            macos::request_badge_authorization();
-            #[cfg(debug_assertions)]
-            macos::prefer_bundle_dock_icon();
+            #[cfg(target_os = "macos")]
+            {
+                macos::request_badge_authorization();
+                #[cfg(debug_assertions)]
+                macos::prefer_bundle_dock_icon();
+            }
+            window::ensure_launch_window_visible(handle);
         }
         tauri::RunEvent::WindowEvent {
             label,
@@ -202,7 +211,19 @@ pub fn run() {
                 reap_harness_children(handle);
             }
         }
-        tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+        tauri::RunEvent::ExitRequested { api, code, .. } => {
+            if window::allow_exit() {
+                return;
+            }
+            api.prevent_exit();
+            // Last window destroyed (red button). Stay in the dock; ⌘Q is a
+            // separate menu handler and arrives with an exit code.
+            if code.is_none() {
+                return;
+            }
+            window::request_quit(handle);
+        }
+        tauri::RunEvent::Exit => {
             reap_harness_children(handle);
         }
         _ => {}

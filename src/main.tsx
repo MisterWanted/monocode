@@ -1,8 +1,13 @@
 import React, { useLayoutEffect } from "react";
 import ReactDOM from "react-dom/client";
+import { listen } from "@tauri-apps/api/event";
 import App from "./App";
 import { initAppearance } from "./lib/appearance";
 import { loadWindowTransfer } from "./lib/windowTransferBootstrap";
+import {
+  handleQuitRequested,
+  loadResumedWorkspace,
+} from "./lib/appLifecycle";
 import "./index.css";
 
 initAppearance();
@@ -23,11 +28,15 @@ function BootGate({ children }: { children: React.ReactNode }) {
 }
 
 async function boot() {
+  await listen("quit_requested", () => {
+    void handleQuitRequested();
+  });
   const windowTransfer = await loadWindowTransfer();
+  const resumed = windowTransfer ? null : await loadResumedWorkspace();
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
       <BootGate>
-        <App windowTransfer={windowTransfer} />
+        <App windowTransfer={windowTransfer} resumed={resumed} />
       </BootGate>
     </React.StrictMode>,
   );

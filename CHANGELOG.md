@@ -7,8 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Closing the window no longer kills a running chat: MonoCode hides instead, and reopening the app brings the same window back mid-turn.
+- Quit (⌘Q) asks first if chats are still running, then restores those sessions the next time you open the app and continues the turn.
+
 ### Fixed
 
+- Quitting during a later turn still resumes: a previous interrupt note no longer blocks Continue on the next quit.
+- Opening a file scrolls its tab into view when the pane's tab strip overflows.
 - Editor syntax lint no longer underlines valid TypeScript (arrow type predicates, typed `catch`, JSX comments, `typeof import()`) or Tailwind `@source` rules. Rust files are still highlighted but are not linted — the highlighter grammar was marking real code as errors.
 
 ## [0.1.1] - 2026-08-21
