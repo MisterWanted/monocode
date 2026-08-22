@@ -52,6 +52,18 @@ describe("buildPiSpawnArgs", () => {
       "--no-extensions",
     );
   });
+
+  it("isolates throwaway text jobs from tools and project context", () => {
+    expect(buildPiSpawnArgs({ isolated: true })).toEqual([
+      "--mode",
+      "rpc",
+      "--no-session",
+      "--no-extensions",
+      "--no-tools",
+      "--no-skills",
+      "--no-context-files",
+    ]);
+  });
 });
 
 describe("parsePiModelRef", () => {
@@ -269,7 +281,12 @@ describe("tools and models", () => {
         sessionFile: "/tmp/session.jsonl",
         model: { contextWindow: 1000 },
       }),
-    ).toBe("/tmp/session.jsonl");
+    ).toBe("abc");
+    expect(
+      providerSessionIdFromState({
+        sessionFile: "/tmp/session.jsonl",
+      }),
+    ).toBeUndefined();
     expect(
       contextFromUsage({
         usage: { totalTokens: 120 },

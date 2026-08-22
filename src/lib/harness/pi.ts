@@ -312,10 +312,12 @@ async function startLive(
     const state = await rpc.request({ type: "get_state" }, INIT_TIMEOUT_MS);
     bindState(input.sessionId, live, state.data);
     await applyModel(live, input);
-    live.onEvent({
-      type: "session.providerBound",
-      providerSessionId: live.providerSessionId || live.cwd,
-    });
+    if (live.providerSessionId) {
+      live.onEvent({
+        type: "session.providerBound",
+        providerSessionId: live.providerSessionId,
+      });
+    }
     live.onEvent({ type: "session.started" });
     return live;
   } catch (error) {

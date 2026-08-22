@@ -108,10 +108,15 @@ export function buildPiSpawnArgs(input: {
   noSession?: boolean;
   /** Only for throwaway text jobs — never for live chat. */
   noExtensions?: boolean;
+  /** Titles and other one-shot prompts: no tools, skills, or project context. */
+  isolated?: boolean;
 }): string[] {
   const args = ["--mode", "rpc"];
-  if (input.noSession) args.push("--no-session");
-  if (input.noExtensions) args.push("--no-extensions");
+  if (input.isolated || input.noSession) args.push("--no-session");
+  if (input.isolated || input.noExtensions) args.push("--no-extensions");
+  if (input.isolated) {
+    args.push("--no-tools", "--no-skills", "--no-context-files");
+  }
   if (input.resume?.trim()) {
     args.push("--session", input.resume.trim());
   }
@@ -294,9 +299,16 @@ export function sessionFromState(data: unknown): {
   };
 }
 
+/**
+ * Session-store ids may only be ASCII letters, digits, `-`, and `_`.
+ * Pi's `sessionFile` is a filesystem path, so persist would reject the whole
+ * upsert (and the sidebar would never get a git snapshot). `--session` accepts
+ * the UUID `sessionId` as well, so that's what we bind.
+ */
 export function providerSessionIdFromState(data: unknown): string | undefined {
-  const state = sessionFromState(data);
-  return state.sessionFile ?? state.sessionId;
+  const sessionId = sessionFromState(data).sessionId?.trim();
+  if (!sessionId || !/^[A-Za-z0-9_-]+$/.test(sessionId)) return undefined;
+  return sessionId;
 }
 
 export function contextFromUsage(

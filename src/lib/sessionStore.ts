@@ -64,6 +64,11 @@ export function shouldPersistSession(session: Session): boolean {
   );
 }
 
+/** Matches Rust `validate_id` — a path here fails the whole upsert. */
+export function isPersistableId(value: string): boolean {
+  return /^[A-Za-z0-9_-]+$/.test(value);
+}
+
 export function sanitizeSessionForPersist(session: Session): SessionUpsertPayload {
   return {
     id: session.id,
@@ -73,7 +78,7 @@ export function sanitizeSessionForPersist(session: Session): SessionUpsertPayloa
     modelSettings: session.modelSettings,
     runtimeMode: session.runtimeMode,
     title: session.title,
-    ...(session.providerSessionId
+    ...(session.providerSessionId && isPersistableId(session.providerSessionId)
       ? { providerSessionId: session.providerSessionId }
       : {}),
     blocks: session.blocks

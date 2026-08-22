@@ -44,6 +44,7 @@ export { generateCursorSessionTitle } from "./cursorTitle";
 export { generateCodexSessionTitle } from "./codexTitle";
 export { generateOpenCodeSessionTitle } from "./opencodeTitle";
 export { generateClaudeSessionTitle } from "./claudeTitle";
+export { generatePiSessionTitle } from "./piTitle";
 export {
   generateCursorCommitMessage,
   generateCursorPrContent,
@@ -70,6 +71,7 @@ export {
 export { warmupCursorText } from "./cursorText";
 export { warmupOpenCodeText } from "./opencodeText";
 export { warmupClaudeText } from "./claudeText";
+export { warmupPiText } from "./piText";
 export { refreshCursorCatalog } from "./cursorCatalog";
 export { refreshCodexCatalog } from "./codexCatalog";
 export { refreshOpenCodeCatalog } from "./opencodeCatalog";

@@ -8,6 +8,8 @@ import {
   stopPiSession,
 } from "./pi";
 import { refreshPiCatalog } from "./piCatalog";
+import { generatePiSessionTitle } from "./piTitle";
+import { warmupPiText } from "./piText";
 import { registerHarness, type HarnessAdapter } from "./registry";
 
 export const piAdapter: HarnessAdapter = {
@@ -21,6 +23,8 @@ export const piAdapter: HarnessAdapter = {
   forgetSession: forgetPiSession,
   bindSession: bindPiSession,
   refreshCatalog: refreshPiCatalog,
+  generateTitle: generatePiSessionTitle,
+  warmupText: warmupPiText,
 };
 
 let registered = false;
