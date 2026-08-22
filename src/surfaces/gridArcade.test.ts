@@ -208,3 +208,153 @@ describe("snake arcade", () => {
     }
   });
 });
+
+/** Matches mid-mode's player tick. */
+const TICK_MS = 38;
+const IDLE_PLAY_ROWS = Math.max(8, Math.floor(ROWS * 0.62));
+/** Matches the arcade's first pellet when a player takes over. */
+const PLAYER_PELLET_AHEAD = 8;
+
+function stampHead(
+  arcade: ReturnType<typeof createSnakeArcade>,
+  cols: number,
+  rows: number,
+) {
+  const stamp = new Float32Array(cols * rows);
+  arcade.stamp(stamp, cols, rows);
+  // Pellet is always the brightest cell; the head is next, even while the
+  // boot fade is still scaling both down.
+  let pelletAt = 0;
+  let pellet = -1;
+  for (let i = 0; i < stamp.length; i++) {
+    const value = stamp[i] ?? 0;
+    if (value > pellet) {
+      pellet = value;
+      pelletAt = i;
+    }
+  }
+  let best = -1;
+  let at = 0;
+  for (let i = 0; i < stamp.length; i++) {
+    if (i === pelletAt) continue;
+    const value = stamp[i] ?? 0;
+    if (value > best) {
+      best = value;
+      at = i;
+    }
+  }
+  return { x: at % cols, y: Math.floor(at / cols), value: best };
+}
+
+describe("player control", () => {
+  it("steers the snake instead of thinking for itself", () => {
+    const arcade = createSnakeArcade();
+    arcade.resize(COLS, ROWS);
+    arcade.takeControl();
+    expect(arcade.controlled()).toBe(true);
+
+    arcade.steer(0, 1);
+    for (let i = 0; i < 5; i++) arcade.step(TICK_MS);
+
+    const head = stampHead(arcade, COLS, ROWS);
+    const spawnY = Math.max(1, Math.floor(ROWS / 2));
+    const spawnX = Math.max(2, Math.floor(COLS / 4));
+    expect(head.x).toBe(spawnX);
+    expect(head.y).toBe(spawnY + 5);
+  });
+
+  it("ignores a reverse into the body", () => {
+    const arcade = createSnakeArcade();
+    arcade.resize(COLS, ROWS);
+    arcade.takeControl();
+    arcade.steer(-1, 0);
+    for (let i = 0; i < 5; i++) arcade.step(TICK_MS);
+
+    const head = stampHead(arcade, COLS, ROWS);
+    const spawnY = Math.max(1, Math.floor(ROWS / 2));
+    const spawnX = Math.max(2, Math.floor(COLS / 4));
+    expect(head.x).toBe(spawnX + 5);
+    expect(head.y).toBe(spawnY);
+  });
+
+  it("ignores steering until someone takes control", () => {
+    const arcade = createSnakeArcade();
+    arcade.resize(COLS, ROWS);
+    expect(arcade.controlled()).toBe(false);
+    arcade.steer(0, 1);
+    expect(arcade.score()).toBe(0);
+  });
+
+  it("scores the pellet waiting in front of a fresh player snake", () => {
+    const arcade = createSnakeArcade();
+    arcade.resize(COLS, ROWS);
+    arcade.takeControl();
+    expect(arcade.score()).toBe(0);
+    for (let i = 0; i < PLAYER_PELLET_AHEAD; i++) arcade.step(TICK_MS);
+    expect(arcade.score()).toBe(1);
+  });
+
+  it("uses the full board rather than the faded idle strip", () => {
+    const arcade = createSnakeArcade();
+    arcade.resize(COLS, ROWS);
+    arcade.takeControl();
+    arcade.steer(0, 1);
+    for (let i = 0; i < 6; i++) arcade.step(TICK_MS);
+
+    const head = stampHead(arcade, COLS, ROWS);
+    expect(head.y).toBeGreaterThan(IDLE_PLAY_ROWS - 1);
+  });
+
+  it("hands the idle brain back when control is released", () => {
+    const arcade = createSnakeArcade();
+    arcade.resize(COLS, ROWS);
+    arcade.takeControl();
+    for (let i = 0; i < PLAYER_PELLET_AHEAD; i++) arcade.step(TICK_MS);
+    expect(arcade.score()).toBe(1);
+
+    arcade.releaseControl();
+    expect(arcade.controlled()).toBe(false);
+    expect(arcade.score()).toBe(0);
+  });
+
+  it("starts on mid and lets hard outrun low", () => {
+    const arcade = createSnakeArcade();
+    arcade.resize(COLS, ROWS);
+    arcade.takeControl();
+    expect(arcade.mode()).toBe("mid");
+
+    const run = (mode: "low" | "mid" | "hard") => {
+      const next = createSnakeArcade();
+      next.resize(COLS, ROWS);
+      next.setMode(mode);
+      next.takeControl();
+      next.step(300);
+      return stampHead(next, COLS, ROWS).x;
+    };
+
+    const spawnX = Math.max(2, Math.floor(COLS / 4));
+    expect(run("low")).toBeGreaterThan(spawnX);
+    expect(run("mid")).toBeGreaterThan(run("low"));
+    expect(run("hard")).toBeGreaterThan(run("mid"));
+  });
+
+  it("keeps a live game when the pane is resized", () => {
+    const arcade = createSnakeArcade();
+    arcade.resize(COLS, ROWS);
+    arcade.takeControl();
+    for (let i = 0; i < PLAYER_PELLET_AHEAD; i++) arcade.step(TICK_MS);
+    expect(arcade.score()).toBe(1);
+
+    arcade.resize(COLS - 40, ROWS + 12);
+    expect(arcade.controlled()).toBe(true);
+    expect(arcade.score()).toBe(1);
+    expect(arcade.mode()).toBe("mid");
+
+    const next = stampHead(arcade, COLS - 40, ROWS + 12);
+    expect(next.value).toBeGreaterThan(0);
+    expect(next.x).toBeGreaterThanOrEqual(0);
+    expect(next.x).toBeLessThan(COLS - 40);
+    expect(next.y).toBeGreaterThanOrEqual(0);
+    expect(next.y).toBeLessThan(ROWS + 12);
+  });
+});

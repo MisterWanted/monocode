@@ -2,9 +2,18 @@ import { HARNESSES, type HarnessId } from "../lib/session";
 
 const BOOT_FADE_MS = 420;
 
-const TICK_MS = 95;
-const TICK_FAST_MS = 72;
-const FAST_AT_LENGTH = 12;
+const TICK_MS = 70;
+const TICK_FAST_MS = 52;
+const FAST_AT_LENGTH = 10;
+
+export const SNAKE_MODES = ["low", "mid", "hard"] as const;
+export type SnakeMode = (typeof SNAKE_MODES)[number];
+
+const PLAYER_TICK: Record<SnakeMode, { base: number; fast: number }> = {
+  low: { base: 72, fast: 54 },
+  mid: { base: 38, fast: 26 },
+  hard: { base: 22, fast: 16 },
+};
 
 /** How many grid cells across the logo pickup sits. */
 export const LOGO_CELLS = 3;
@@ -52,6 +61,9 @@ const LOGO_REACH = Math.floor((LOGO_LIFE_MS * 0.7) / TICK_MS);
 
 const PELLET_VALUE = 1;
 const HEAD_VALUE = 0.9;
+
+/** How far ahead of a fresh player snake the first pellet sits. */
+const PLAYER_PELLET_AHEAD = 8;
 
 /** A pixel speech bubble trailing the snake's head. */
 export type SpeechBubble = {
@@ -107,6 +119,7 @@ export function createSnakeArcade() {
 
   let body: Cell[] = [];
   let dir = { x: 1, y: 0 };
+  let pending: Cell | null = null;
   let grow = 0;
   let pellet: Cell = { x: 0, y: 0 };
   const occupied = new Set<string>();
@@ -117,8 +130,14 @@ export function createSnakeArcade() {
   let lastChatter = -1;
   let tickAcc = 0;
   let booted = 0;
+  let player = false;
+  let score = 0;
+  let mode: SnakeMode = "mid";
 
   const key = (x: number, y: number) => `${x},${y}`;
+
+  const computePlayRows = () =>
+    player ? Math.max(8, rows) : Math.max(8, Math.floor(rows * 0.62));
 
   const syncOccupied = () => {
     occupied.clear();
@@ -181,9 +200,19 @@ export function createSnakeArcade() {
       { x: x - 2, y },
     ];
     dir = { x: 1, y: 0 };
+    pending = null;
     grow = 0;
     syncOccupied();
-    placePellet();
+    if (player) {
+      const ahead = wrap(x + PLAYER_PELLET_AHEAD, cols);
+      if (!occupied.has(key(ahead, y)) && !onLogo(ahead, y)) {
+        pellet = { x: ahead, y };
+      } else {
+        placePellet();
+      }
+    } else {
+      placePellet();
+    }
   };
 
   const spawnLogo = () => {
@@ -259,7 +288,14 @@ export function createSnakeArcade() {
   };
 
   const advance = () => {
-    think();
+    if (player) {
+      if (pending && !(pending.x === -dir.x && pending.y === -dir.y)) {
+        dir = pending;
+      }
+      pending = null;
+    } else {
+      think();
+    }
     const head = body[0];
     if (!head) return;
 
@@ -272,6 +308,7 @@ export function createSnakeArcade() {
       occupied.has(key(next.x, next.y)) &&
       !(tail && next.x === tail.x && next.y === tail.y);
     if (hit || body.length > maxLength()) {
+      if (player) score = 0;
       spawnSnake();
       return;
     }
@@ -282,8 +319,10 @@ export function createSnakeArcade() {
       clearLogo();
       speech = { text: nextChatter(), age: 0 };
       grow += LOGO_GROWTH;
+      if (player) score += LOGO_GROWTH;
     } else if (next.x === pellet.x && next.y === pellet.y) {
       grow += 1;
+      if (player) score += 1;
       placePellet();
     }
 
@@ -293,13 +332,54 @@ export function createSnakeArcade() {
     syncOccupied();
   };
 
+  const relayout = () => {
+    const fit = (cell: Cell): Cell => ({
+      x: wrap(cell.x, cols),
+      y: wrap(cell.y, playRows),
+    });
+    const seen = new Set<string>();
+    body = body.map(fit).filter((cell) => {
+      const id = key(cell.x, cell.y);
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+    if (body.length === 0) {
+      spawnSnake();
+      return;
+    }
+    pellet = fit(pellet);
+    if (logo) {
+      if (cols < LOGO_CELLS || playRows < LOGO_CELLS) {
+        logo = null;
+      } else {
+        logo = {
+          ...logo,
+          x: clamp(logo.x, 0, cols - LOGO_CELLS),
+          y: clamp(logo.y, 0, playRows - LOGO_CELLS),
+        };
+      }
+    }
+    syncOccupied();
+    if (occupied.has(key(pellet.x, pellet.y)) || onLogo(pellet.x, pellet.y)) {
+      placePellet();
+    }
+  };
+
   const boot = () => {
     booted = 0;
     tickAcc = 0;
+    score = 0;
+    pending = null;
     logo = null;
     speech = null;
     logoTimer = nextLogoDelay();
     spawnSnake();
+  };
+
+  const playerTick = () => {
+    const speeds = PLAYER_TICK[mode];
+    return body.length > FAST_AT_LENGTH ? speeds.fast : speeds.base;
   };
 
   /** 0 while fading in, ramping to 1 — keeps resizes from popping. */
@@ -308,10 +388,58 @@ export function createSnakeArcade() {
   return {
     resize(nextCols: number, nextRows: number) {
       if (nextCols === cols && nextRows === rows) return;
+      const keepGame = player && body.length > 0 && cols > 0;
       cols = nextCols;
       rows = nextRows;
-      playRows = Math.max(8, Math.floor(rows * 0.62));
+      playRows = computePlayRows();
+      if (keepGame) relayout();
+      else boot();
+    },
+
+    /** Hands the heading over to the caller; the idle brain goes quiet. */
+    takeControl() {
+      if (player) return;
+      player = true;
+      playRows = computePlayRows();
       boot();
+    },
+
+    /** Puts the idle brain back in the seat. */
+    releaseControl() {
+      if (!player) return;
+      player = false;
+      playRows = computePlayRows();
+      boot();
+    },
+
+    /**
+     * Queue the next heading. 180s against the current direction are ignored,
+     * same as any other snake — you cannot reverse into yourself.
+     */
+    steer(x: number, y: number) {
+      if (!player) return;
+      if (Math.abs(x) + Math.abs(y) !== 1) return;
+      if (x === -dir.x && y === -dir.y) return;
+      pending = { x, y };
+    },
+
+    setMode(next: SnakeMode) {
+      if (mode === next) return;
+      mode = next;
+      // Don't dump a slow-mode remainder as extra steps on a faster tick.
+      tickAcc = 0;
+    },
+
+    mode() {
+      return mode;
+    },
+
+    controlled() {
+      return player;
+    },
+
+    score() {
+      return score;
     },
 
     step(dt: number) {
@@ -337,7 +465,11 @@ export function createSnakeArcade() {
       }
 
       tickAcc += dt;
-      const tick = body.length > FAST_AT_LENGTH ? TICK_FAST_MS : TICK_MS;
+      const tick = player
+        ? playerTick()
+        : body.length > FAST_AT_LENGTH
+          ? TICK_FAST_MS
+          : TICK_MS;
       while (tickAcc >= tick) {
         tickAcc -= tick;
         advance();

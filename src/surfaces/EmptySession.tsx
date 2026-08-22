@@ -23,8 +23,8 @@ export function EmptySession({ cwd, composer }: Props) {
     >
       <TerminalGridBackground />
       {composer ? (
-        <div className="relative z-10 mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center px-6 py-12">
-          <div className="mb-4 px-2.5">
+        <div className="pointer-events-none relative z-10 mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center px-6 py-12">
+          <div className="pointer-events-auto mb-4 px-2.5">
             <h1
               className="truncate text-lg text-content"
               title={project ? cwd : undefined}
@@ -33,7 +33,7 @@ export function EmptySession({ cwd, composer }: Props) {
             </h1>
           </div>
 
-          <div className="w-full">{composer}</div>
+          <div className="pointer-events-auto w-full">{composer}</div>
         </div>
       ) : null}
     </div>
