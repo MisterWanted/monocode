@@ -1,5 +1,6 @@
 import { GripVertical, SquareTerminal, X } from "lucide-react";
 import type { PointerEvent as ReactPointerEvent } from "react";
+import { useLayoutEffect, useRef } from "react";
 import { basename } from "../lib/fs";
 import { isPlanTab, isReviewTab, isTerminalTab, type FilePaneTab } from "../lib/layout";
 import { terminalTabLabel } from "../lib/terminalTab";
@@ -35,9 +36,18 @@ export function SurfaceTabs({
   onPaneDragStart,
 }: Props) {
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
+  const activeTabRef = useRef<HTMLDivElement | null>(null);
   const fileIds = files.map((file) => file.id);
   const sortable = useSortable(fileIds, onReorder);
   const canDrag = files.length > 1;
+
+  useLayoutEffect(() => {
+    if (sortable.draggingId) return;
+    activeTabRef.current?.scrollIntoView({
+      inline: "nearest",
+      block: "nearest",
+    });
+  }, [activeFileId, sortable.draggingId]);
 
   return (
     <div
@@ -90,7 +100,10 @@ export function SurfaceTabs({
         return (
           <div
             key={file.id}
-            ref={(el) => sortable.setItemRef(file.id, el)}
+            ref={(el) => {
+              sortable.setItemRef(file.id, el);
+              if (el && file.id === activeFileId) activeTabRef.current = el;
+            }}
             className={`group relative flex w-52 min-w-28 shrink touch-none items-stretch border-r border-content/10 ${
               active ? "bg-content/8" : "hover:bg-content/5"
             } ${dragging ? "opacity-40" : ""} ${
