@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Editor syntax lint no longer underlines valid TypeScript (arrow type predicates, typed `catch`, JSX comments, `typeof import()`) or Tailwind `@source` rules. Rust files are still highlighted but are not linted — the highlighter grammar was marking real code as errors.
+
 ## [0.1.1] - 2026-08-21
 
 ### Added

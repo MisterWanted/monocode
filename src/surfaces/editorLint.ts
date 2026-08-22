@@ -1,4 +1,4 @@
-import { syntaxTree } from "@codemirror/language";
+import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { diagnosticCount, linter, type Diagnostic } from "@codemirror/lint";
 import type { EditorState, Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -12,6 +12,12 @@ import { basename } from "../lib/fs";
  * back out costs one tree walk and no new parsing, so this catches the typo
  * class of mistakes — unclosed brackets, stray quotes, malformed statements —
  * without any of the weight of a real type checker or language server.
+ *
+ * Highlighter grammars are not spec-complete. Known gaps (arrow type
+ * predicates, typed `catch`, Tailwind `@source`, …) are filtered so they
+ * don't light up as errors. Rust is highlighted but not linted: `@lezer/rust`
+ * still misses `let`-`else` and attributes on statements, and those holes
+ * cascade through the rest of the file.
  */
 
 /** Mirrors `MAX_FORMAT_CHARS` in lib/format: past this, a file is a viewer. */
@@ -28,10 +34,13 @@ const LINT_DELAY_MS = 700;
 
 const MAX_TOKEN_CHARS = 24;
 
+/** Timebox a full parse so lint doesn't wait on a huge file's last chunk. */
+const PARSE_BUDGET_MS = 150;
+
 /**
  * Extensions whose grammar actually reports errors. Keep in sync with
- * `languageForPath` in editorChrome — minus Markdown, whose parser accepts
- * anything, so linting it is pure cost for zero diagnostics.
+ * `languageForPath` in editorChrome — minus Markdown (accepts anything) and
+ * Rust (highlighter grammar is too incomplete to trust).
  */
 const LINTABLE_EXTENSIONS = new Set([
   ".js",
@@ -44,7 +53,6 @@ const LINTABLE_EXTENSIONS = new Set([
   ".css",
   ".html",
   ".htm",
-  ".rs",
   ".py",
 ]);
 
@@ -93,10 +101,20 @@ export function isLintable(path: string): boolean {
 export function syntaxDiagnostics(state: EditorState): Diagnostic[] {
   if (state.doc.length > MAX_LINT_CHARS) return [];
 
+  // Viewport parsing leaves a dummy error at the frontier (~3kb in). Lint
+  // has to finish the tree or it will underline the next `import` forever.
+  const tree =
+    ensureSyntaxTree(state, state.doc.length, PARSE_BUDGET_MS) ??
+    syntaxTree(state);
+  if (tree.length === 0) return [];
+
+  const incomplete = tree.length < state.doc.length;
   const diagnostics: Diagnostic[] = [];
-  syntaxTree(state).iterate({
+  tree.iterate({
     enter: (node) => {
       if (!node.type.isError) return true;
+      if (incomplete && node.from >= tree.length) return false;
+      if (isGrammarGap(state, node.node.parent, node.from)) return false;
       if (diagnostics.length < MAX_DIAGNOSTICS) {
         diagnostics.push(errorDiagnostic(state, node.from, node.to));
       }
@@ -106,6 +124,41 @@ export function syntaxDiagnostics(state: EditorState): Diagnostic[] {
     },
   });
   return diagnostics;
+}
+
+/** Arrow `(x): x is T =>`, including tuple predicates like `x is [K, V]`. */
+const TYPE_PREDICATE = /:\s*(?:asserts\s+)?(?:this|[\w$]+)\s+is\b/;
+
+/** `catch (error: unknown)` — Lezer's catch clause has no type annotation. */
+const TYPED_CATCH = /^catch\s*\(\s*[\w$]+\s*:/;
+
+// Multiline JSX comments: `{` then block-comment then `}`.
+const JSX_BLOCK_COMMENT = /^\{\s*\/\*/;
+
+/** Tailwind v4 at-rules the CSS grammar doesn't know. */
+const TAILWIND_AT =
+  /^@(?:source|plugin|theme|utility|custom-variant|reference|config)\b/;
+
+/** `fn<typeof import("mod")>()` — `import(` is parsed as a dynamic import. */
+const TYPEOF_IMPORT = /<typeof\s+import\s*\(/;
+
+function isGrammarGap(
+  state: EditorState,
+  parent: { name: string; from: number; to: number; parent: unknown } | null,
+  from: number,
+): boolean {
+  const line = state.doc.lineAt(from).text;
+  // Tuple predicates (`x is [K, V]`) blow the statement apart, so the `is`
+  // token is no longer inside TypeAnnotation. The whole line is the predicate.
+  if (TYPE_PREDICATE.test(line) || TYPEOF_IMPORT.test(line)) return true;
+
+  for (; parent; parent = parent.parent as typeof parent) {
+    const text = state.doc.sliceString(parent.from, parent.to);
+    if (parent.name === "CatchClause" && TYPED_CATCH.test(text)) return true;
+    if (parent.name === "JSXEscape" && JSX_BLOCK_COMMENT.test(text)) return true;
+    if (parent.name === "AtRule" && TAILWIND_AT.test(text)) return true;
+  }
+  return false;
 }
 
 function errorDiagnostic(

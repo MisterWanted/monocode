@@ -1,3 +1,4 @@
+import { css } from "@codemirror/lang-css";
 import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/lang-json";
 import { python } from "@codemirror/lang-python";
@@ -7,6 +8,18 @@ import { isLintable, syntaxDiagnostics } from "./editorLint";
 
 function stateWith(doc: string, language: Extension): EditorState {
   return EditorState.create({ doc, extensions: [language] });
+}
+
+function typescript(): Extension {
+  return javascript({ typescript: true });
+}
+
+function typescriptJsx(): Extension {
+  return javascript({ typescript: true, jsx: true });
+}
+
+function cssLang(): Extension {
+  return css();
 }
 
 describe("syntaxDiagnostics", () => {
@@ -74,6 +87,66 @@ describe("syntaxDiagnostics", () => {
   it("reports nothing without a language", () => {
     expect(syntaxDiagnostics(EditorState.create({ doc: "){}(" }))).toEqual([]);
   });
+
+  it("does not flag a TypeScript type predicate on an arrow function", () => {
+    const state = stateWith(
+      "const xs = ids\n  .map((id) => sessions.find((s) => s.id === id))\n  .filter((session): session is Session => session != null);\n",
+      typescript(),
+    );
+    expect(syntaxDiagnostics(state)).toEqual([]);
+  });
+
+  it("does not flag a tuple type predicate", () => {
+    const state = stateWith(
+      "entries.filter((entry): entry is [string, string] => entry.length === 2);\n",
+      typescript(),
+    );
+    expect(syntaxDiagnostics(state)).toEqual([]);
+  });
+
+  it("does not flag a typed catch clause", () => {
+    const state = stateWith(
+      "try { run(); } catch (error: unknown) { report(error); }\n",
+      typescript(),
+    );
+    expect(syntaxDiagnostics(state)).toEqual([]);
+  });
+
+  it("does not flag a multiline JSX comment", () => {
+    const open = `{${"/*"}`;
+    const close = `${"*/"}}`;
+    const state = stateWith(
+      `function T() {\n  return (\n    <div>\n      ${open}\n        hello\n      ${close}\n      <span />\n    </div>\n  );\n}\n`,
+      typescriptJsx(),
+    );
+    expect(syntaxDiagnostics(state)).toEqual([]);
+  });
+
+  it("does not flag typeof import() type arguments", () => {
+    const state = stateWith(
+      'const actual = await importOriginal<typeof import("./fs")>();\n',
+      typescript(),
+    );
+    expect(syntaxDiagnostics(state)).toEqual([]);
+  });
+
+  it("does not flag Tailwind @source rules", () => {
+    const state = stateWith(
+      '@import "tailwindcss";\n@source "../node_modules/foo/*.js";\n@theme { --color-x: red; }\n',
+      cssLang(),
+    );
+    expect(syntaxDiagnostics(state)).toEqual([]);
+  });
+
+  it("still flags a real TypeScript syntax error", () => {
+    const state = stateWith("function go() {\n  return 1;\n", typescript());
+    expect(syntaxDiagnostics(state).length).toBeGreaterThan(0);
+  });
+
+  it("does not flag the parse frontier on a long valid file", () => {
+    const state = stateWith("const a = 1;\n".repeat(400), typescript());
+    expect(syntaxDiagnostics(state)).toEqual([]);
+  });
 });
 
 describe("isLintable", () => {
@@ -83,7 +156,6 @@ describe("isLintable", () => {
       "/a/b.tsx",
       "/a/b.json",
       "/a/b.css",
-      "/a/b.rs",
       "/a/b.py",
     ]) {
       expect(isLintable(path)).toBe(true);
@@ -93,6 +165,10 @@ describe("isLintable", () => {
   it("skips Markdown, whose parser accepts anything", () => {
     expect(isLintable("/a/README.md")).toBe(false);
     expect(isLintable("/a/b.mdx")).toBe(false);
+  });
+
+  it("skips Rust, whose highlighter grammar is too incomplete to lint", () => {
+    expect(isLintable("/a/lib.rs")).toBe(false);
   });
 
   it("skips files with no grammar", () => {
