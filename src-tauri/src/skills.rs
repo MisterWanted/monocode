@@ -266,7 +266,11 @@ fn slug_name(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::ErrorKind;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
     struct Tmp(PathBuf);
     impl Drop for Tmp {
@@ -276,16 +280,22 @@ mod tests {
     }
 
     fn tmp(label: &str) -> Tmp {
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "monocode-skills-{label}-{}-{stamp}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        Tmp(dir)
+        loop {
+            let stamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!(
+                "monocode-skills-{label}-{}-{stamp}-{seq}",
+                std::process::id()
+            ));
+            match std::fs::create_dir(&dir) {
+                Ok(()) => return Tmp(dir),
+                Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("{}", error),
+            }
+        }
     }
 
     fn write_skill(root: &Path, folder: &str, body: &str) {

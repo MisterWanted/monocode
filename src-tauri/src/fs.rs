@@ -841,12 +841,12 @@ fn git_hash_object(root: &Path, relative: &str, contents: &[u8]) -> Result<Strin
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| e.to_string())?;
-    child
+    let mut stdin = child
         .stdin
-        .as_mut()
-        .ok_or_else(|| "hash-object stdin".to_string())?
-        .write_all(contents)
-        .map_err(|e| e.to_string())?;
+        .take()
+        .ok_or_else(|| "hash-object stdin".to_string())?;
+    stdin.write_all(contents).map_err(|e| e.to_string())?;
+    drop(stdin);
     let output = child.wait_with_output().map_err(|e| e.to_string())?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2359,6 +2359,9 @@ pub fn reveal_path(path: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn stat_files_returns_mtime_for_existing_files_only() {
@@ -2435,14 +2438,22 @@ mod tests {
     }
 
     fn tmp(label: &str) -> Tmp {
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir =
-            std::env::temp_dir().join(format!("monocode-{label}-{}-{stamp}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        Tmp(dir)
+        loop {
+            let stamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!(
+                "monocode-{label}-{}-{stamp}-{seq}",
+                std::process::id()
+            ));
+            match std::fs::create_dir(&dir) {
+                Ok(()) => return Tmp(dir),
+                Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("{}", error),
+            }
+        }
     }
 
     #[test]
